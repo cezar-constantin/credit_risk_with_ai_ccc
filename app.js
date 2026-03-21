@@ -194,6 +194,7 @@ const MAX_TRACKED_DISTINCT_VALUES = 51
 const ALLOWED_BINARY_VALUES = new Set(["0", "1", "true", "false", "yes", "no", "default", "non-default", "good", "bad"])
 const DEMO_DATASET_ASSET = "./data/rating_model_data.csv"
 const DEMO_DATASET_FILE_NAME = "rating_model_data.csv"
+const CONTACT_FORM_ENDPOINT = "https://formsubmit.co/ajax/cezar.chirila@helvetic-ai-compass.ch"
 
 const elements = {
   heroDataset: document.getElementById("hero-dataset"),
@@ -223,6 +224,9 @@ const elements = {
   mobileStepMeta: document.getElementById("mobile-step-meta"),
   mobileStepPrev: document.getElementById("mobile-step-prev"),
   mobileStepNext: document.getElementById("mobile-step-next"),
+  contactForm: document.getElementById("contact-form"),
+  contactSubmitButton: document.getElementById("contact-submit-button"),
+  contactStatus: document.getElementById("contact-status"),
   tabButtons: Array.from(document.querySelectorAll(".tab-button")),
 }
 
@@ -302,6 +306,7 @@ function bindGlobalEvents() {
   elements.mobileStepNext.addEventListener("click", () => {
     navigateStepByOffset(1)
   })
+  elements.contactForm.addEventListener("submit", handleContactFormSubmit)
   elements.resetButton.addEventListener("click", () => {
     cancelActiveLoad()
     state = createInitialState()
@@ -393,6 +398,92 @@ function navigateStepByOffset(offset) {
   }
 
   activateStep(nextStep.key, { scrollToStep: true })
+}
+
+async function handleContactFormSubmit(event) {
+  event.preventDefault()
+
+  const form = elements.contactForm
+  const formData = new FormData(form)
+  const fullName = String(formData.get("fullName") || "").trim()
+  const company = String(formData.get("company") || "").trim()
+  const email = String(formData.get("email") || "").trim()
+  const subject = String(formData.get("subject") || "").trim()
+  const question = String(formData.get("question") || "").trim()
+
+  if (!fullName || !email || !subject || !question) {
+    setContactStatus("Please complete full name, email address, question topic, and question.", "error")
+    return
+  }
+
+  if (!isLikelyEmail(email)) {
+    setContactStatus("Please provide a valid email address before sending the question.", "error")
+    return
+  }
+
+  if (!window.navigator.onLine) {
+    setContactStatus("You appear to be offline. Reconnect to the internet and try again.", "error")
+    return
+  }
+
+  const activeStep = getStepDefinition(state.activeStep)
+  const payload = {
+    name: fullName,
+    company: company || "Not provided",
+    email,
+    subject,
+    message: question,
+    dataset: state.datasetName || "No dataset loaded",
+    active_step: activeStep?.label || state.activeStep,
+    loaded_rows: state.rows.length ? formatInteger(state.rows.length) : "0",
+    website: window.location.href,
+    _subject: `Credit risk with AI | ${subject}`,
+    _template: "table",
+    _captcha: "false",
+  }
+
+  elements.contactSubmitButton.disabled = true
+  elements.contactSubmitButton.textContent = "Sending..."
+  setContactStatus("Sending your question directly from the simulator.", "")
+
+  try {
+    const response = await fetch(CONTACT_FORM_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    })
+    const result = await response.json().catch(() => ({}))
+
+    if (!response.ok || result.success === false) {
+      throw new Error(result.message || "The contact service did not confirm the submission.")
+    }
+
+    form.reset()
+    setContactStatus("Your question has been sent. You should receive a reply at the email address you provided.", "success")
+    showToast("Question sent successfully.")
+  } catch (error) {
+    setContactStatus(
+      "The question could not be sent right now. Please try again in a moment or contact cezar.chirila@helvetic-ai-compass.ch directly.",
+      "error"
+    )
+    showToast(`Contact form error: ${error.message}`)
+  } finally {
+    elements.contactSubmitButton.disabled = false
+    elements.contactSubmitButton.textContent = "Send question"
+  }
+}
+
+function setContactStatus(message, tone = "") {
+  elements.contactStatus.textContent = message
+  elements.contactStatus.classList.toggle("is-success", tone === "success")
+  elements.contactStatus.classList.toggle("is-error", tone === "error")
+}
+
+function isLikelyEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
 async function handleFileInput(event) {

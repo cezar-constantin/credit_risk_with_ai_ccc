@@ -179,6 +179,79 @@
       </section>
 
       <main class="step-shell" id="active-step-shell" aria-live="polite"></main>
+
+      <section class="footer-panel-grid" aria-label="Support and disclaimer">
+        <section class="card support-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Contact</p>
+              <h2>Ask a question directly from the simulator</h2>
+            </div>
+            <span class="status-pill">In-platform contact form</span>
+          </div>
+          <p class="helper-copy contact-copy">
+            For more information, visit <a href="https://helvetic-ai-compass.ch/" target="_blank" rel="noreferrer">www.helvetic-ai-compass.ch</a>.
+            Direct contact address: <strong>cezar.chirila@helvetic-ai-compass.ch</strong>.
+          </p>
+
+          <form class="support-form" id="contact-form" novalidate>
+            <div class="panel-subgrid two-up">
+              <label class="field-card" for="contact-full-name">
+                <span class="field-label">Full name</span>
+                <input class="field-input" id="contact-full-name" name="fullName" type="text" autocomplete="name" required />
+              </label>
+              <label class="field-card" for="contact-company">
+                <span class="field-label">Company</span>
+                <input class="field-input" id="contact-company" name="company" type="text" autocomplete="organization" />
+              </label>
+              <label class="field-card" for="contact-email">
+                <span class="field-label">Email address</span>
+                <input class="field-input" id="contact-email" name="email" type="email" autocomplete="email" required />
+              </label>
+              <label class="field-card" for="contact-subject">
+                <span class="field-label">Question topic</span>
+                <input class="field-input" id="contact-subject" name="subject" type="text" placeholder="Teaching use case, simulator support, methodology..." required />
+              </label>
+            </div>
+
+            <label class="field-card" for="contact-question">
+              <span class="field-label">Question</span>
+              <textarea
+                class="editor-textarea contact-textarea"
+                id="contact-question"
+                name="question"
+                rows="6"
+                placeholder="Write your question, context, or teaching use case here."
+                required
+              ></textarea>
+            </label>
+
+            <div class="contact-form-actions">
+              <button class="primary-button" id="contact-submit-button" type="submit">Send question</button>
+              <p class="contact-status" id="contact-status" aria-live="polite"></p>
+            </div>
+          </form>
+        </section>
+
+        <section class="card disclaimer-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Disclaimer</p>
+              <h2>Educational use only</h2>
+            </div>
+            <span class="status-pill">Non-commercial material</span>
+          </div>
+          <p class="helper-copy">
+            The materials, models, code, methodologies, outputs, and visualizations made available through this simulator are provided solely for educational, training, and illustrative purposes.
+          </p>
+          <p class="helper-copy">
+            They do not constitute legal, regulatory, accounting, audit, tax, investment, model risk management, credit risk, or any other professional advice, and they must not be relied upon for production, commercial, client-facing, regulatory, or other business-critical use cases.
+          </p>
+          <p class="helper-copy">
+            No representation or warranty, express or implied, is made as to the accuracy, completeness, fitness for purpose, or regulatory suitability of the content. Any commercial exploitation or operational deployment is strictly prohibited unless independently validated and reviewed by appropriately qualified professionals under the relevant governance framework.
+          </p>
+        </section>
+      </section>
     </div>
 
     <div class="toast" id="toast" hidden></div>
