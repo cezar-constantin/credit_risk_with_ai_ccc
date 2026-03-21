@@ -97,6 +97,7 @@ body::before {
   gap: 24px;
   justify-content: space-between;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .hero-copy {
@@ -186,6 +187,36 @@ h3 {
   min-width: 320px;
   display: grid;
   gap: 12px;
+}
+
+.hero-qr-card {
+  width: clamp(172px, 17vw, 228px);
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 18px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(237, 243, 255, 0.92));
+  border: 1px solid rgba(163, 180, 235, 0.34);
+  color: inherit;
+  text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.hero-qr-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.hero-qr-caption {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--blue-deep);
 }
 
 .metric-chip,
@@ -896,6 +927,10 @@ h3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .hero-qr-card {
+    width: min(220px, 100%);
+  }
+
   .field-grid,
   .field-grid.compact-grid,
   .metric-grid,
@@ -952,6 +987,10 @@ h3 {
 
   .hero-badges {
     grid-template-columns: 1fr;
+  }
+
+  .hero-qr-card {
+    width: min(220px, 100%);
   }
 
   .data-table {

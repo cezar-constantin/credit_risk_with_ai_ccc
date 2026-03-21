@@ -8,6 +8,15 @@
       name="description"
       content="Interactive credit risk simulator with uploadable datasets, rating model development, synchronized R code and methodology, and Basel III / Basel IV RWA analytics."
     />
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-M57R56L0G0"></script>
+    <script>
+      window.dataLayer = window.dataLayer || []
+      function gtag() {
+        dataLayer.push(arguments)
+      }
+      gtag("js", new Date())
+      gtag("config", "G-M57R56L0G0")
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -26,15 +35,6 @@
             Upload a portfolio, shape a rating model step by step, and keep the interface, the R implementation, and
             the methodology aligned in one human-in-the-loop workflow.
           </p>
-          <div class="hero-flow">
-            <span class="flow-chip">Data preparation</span>
-            <span class="flow-chip">Estimation</span>
-            <span class="flow-chip">Validation</span>
-            <span class="flow-chip">Monitoring</span>
-            <span class="flow-chip">Calibration</span>
-            <span class="flow-chip">Basel III RWA</span>
-            <span class="flow-chip">Basel IV RWA</span>
-          </div>
         </div>
         <div class="hero-badges">
           <article class="metric-chip">
@@ -50,6 +50,20 @@
             <strong id="hero-model-status">No model estimated</strong>
           </article>
         </div>
+        <a
+          class="hero-qr-card"
+          href="https://cezar-constantin.github.io/credit_risk_with_ai/"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open the live Credit risk with AI simulator"
+        >
+          <span class="metric-label">Scan to open</span>
+          <img
+            src="https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=https%3A%2F%2Fcezar-constantin.github.io%2Fcredit_risk_with_ai%2F"
+            alt="QR code linking to the live Credit risk with AI simulator"
+          />
+          <span class="hero-qr-caption">Live simulator on GitHub Pages</span>
+        </a>
       </header>
 
       <section class="card workspace-card">

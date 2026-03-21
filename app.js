@@ -192,6 +192,8 @@ const DEFAULT_NOTES = {
 const HERO_EMPTY_MODEL_TEXT = "No model estimated"
 const MAX_TRACKED_DISTINCT_VALUES = 51
 const ALLOWED_BINARY_VALUES = new Set(["0", "1", "true", "false", "yes", "no", "default", "non-default", "good", "bad"])
+const DEMO_DATASET_ASSET = "./data/rating_model_data.csv"
+const DEMO_DATASET_FILE_NAME = "rating_model_data.csv"
 
 const elements = {
   heroDataset: document.getElementById("hero-dataset"),
@@ -220,6 +222,7 @@ const elements = {
 
 let toastTimer = null
 let activeLoadToken = 0
+let activeLoadAbortController = null
 let shouldScrollToPreparationDiagnostics = false
 let state = createInitialState()
 
@@ -283,10 +286,7 @@ function buildDocumentWindowState() {
 function bindGlobalEvents() {
   elements.fileInput.addEventListener("change", handleFileInput)
   elements.loadDemoButton.addEventListener("click", () => {
-    cancelActiveLoad()
-    const demo = buildDemoDataset()
-    hydrateDataset(demo.rows, demo.columns, "demo_credit_portfolio.csv")
-    showToast("Demo portfolio loaded.")
+    void loadBundledDemoPortfolio()
   })
   elements.resetButton.addEventListener("click", () => {
     cancelActiveLoad()
@@ -354,14 +354,54 @@ async function handleFileInput(event) {
   }
 }
 
-function startLoadingSession(file) {
+async function loadBundledDemoPortfolio() {
+  cancelActiveLoad()
+  const loadToken = startLoadingSession(
+    { name: DEMO_DATASET_FILE_NAME, size: 0 },
+    "Downloading the bundled portfolio and preparing the incremental browser parser."
+  )
+  const abortController = new AbortController()
+  activeLoadAbortController = abortController
+
+  try {
+    await waitForNextFrame()
+    const demoFile = await fetchBundledDemoFile(loadToken, abortController)
+    assertActiveLoad(loadToken)
+    const parsed = await parseDelimitedFile(demoFile, loadToken, { start: 0.32, end: 0.94 })
+    assertActiveLoad(loadToken)
+    setLoadingState({
+      phase: "Finalizing demo portfolio",
+      message: "Preparing the simulator workspace, field mapping, and initial documentation.",
+      progress: 0.98,
+      loadedBytes: demoFile.size,
+      totalBytes: demoFile.size,
+      parsedRows: parsed.rows.length,
+    })
+    await waitForNextFrame()
+    hydrateDataset(parsed.rows, parsed.columns, DEMO_DATASET_FILE_NAME, parsed.metadata)
+    clearLoadingState(true)
+    showToast("Demo portfolio loaded.")
+  } catch (error) {
+    if (isCancelledLoad(error) || error?.name === "AbortError") {
+      return
+    }
+    clearLoadingState(true)
+    showToast(`Could not load the demo portfolio: ${error.message}`)
+  } finally {
+    if (activeLoadAbortController === abortController) {
+      activeLoadAbortController = null
+    }
+  }
+}
+
+function startLoadingSession(file, message = "Opening the file and switching to an incremental parser for large datasets.") {
   activeLoadToken += 1
   const loadToken = activeLoadToken
   state.loading = {
     active: true,
     fileName: file.name,
     phase: "Preparing upload",
-    message: "Opening the file and switching to an incremental parser for large datasets.",
+    message,
     progress: 0,
     loadedBytes: 0,
     totalBytes: file.size,
@@ -373,6 +413,10 @@ function startLoadingSession(file) {
 
 function cancelActiveLoad() {
   activeLoadToken += 1
+  if (activeLoadAbortController) {
+    activeLoadAbortController.abort()
+    activeLoadAbortController = null
+  }
   clearLoadingState()
 }
 
@@ -406,12 +450,103 @@ function clearLoadingState(shouldRerender = false) {
   renderLoadingState()
 }
 
-async function parseDelimitedFile(file, loadToken) {
+async function fetchBundledDemoFile(loadToken, abortController) {
+  const assetUrl = new URL(DEMO_DATASET_ASSET, window.location.href)
+  const response = await fetch(assetUrl, {
+    cache: "no-store",
+    signal: abortController.signal,
+  })
+  assertActiveLoad(loadToken)
+
+  if (!response.ok) {
+    throw new Error(`The bundled dataset returned ${response.status}.`)
+  }
+
+  const headerTotalBytes = Number(response.headers.get("content-length")) || 0
+  setLoadingState({
+    phase: "Downloading demo portfolio",
+    message: "Loading the bundled portfolio asset before parsing it in chunks.",
+    progress: headerTotalBytes ? 0.03 : 0.05,
+    loadedBytes: 0,
+    totalBytes: headerTotalBytes,
+    parsedRows: 0,
+  })
+
+  if (!response.body || typeof response.body.getReader !== "function") {
+    const blob = await response.blob()
+    assertActiveLoad(loadToken)
+    setLoadingState({
+      phase: "Download complete",
+      message: "The demo portfolio is ready. The browser is about to parse it in chunks.",
+      progress: 0.32,
+      loadedBytes: blob.size,
+      totalBytes: headerTotalBytes || blob.size,
+      parsedRows: 0,
+    })
+    return createBlobBackedFile(blob, DEMO_DATASET_FILE_NAME)
+  }
+
+  const reader = response.body.getReader()
+  const chunks = []
+  let loadedBytes = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    assertActiveLoad(loadToken)
+    if (!value?.length) {
+      continue
+    }
+
+    chunks.push(value)
+    loadedBytes += value.length
+    setLoadingState({
+      phase: "Downloading demo portfolio",
+      message: "Streaming the bundled CSV into the browser before the parsing step begins.",
+      progress: headerTotalBytes ? Math.min((loadedBytes / headerTotalBytes) * 0.28, 0.28) : Math.min(0.05 + chunks.length * 0.01, 0.28),
+      loadedBytes,
+      totalBytes: headerTotalBytes,
+      parsedRows: 0,
+    })
+    await waitForNextFrame()
+  }
+
+  const blob = new Blob(chunks, {
+    type: response.headers.get("content-type") || "text/csv;charset=utf-8",
+  })
+  setLoadingState({
+    phase: "Download complete",
+    message: "The demo portfolio is ready. The browser is about to parse it in chunks.",
+    progress: 0.32,
+    loadedBytes,
+    totalBytes: headerTotalBytes || blob.size,
+    parsedRows: 0,
+  })
+  return createBlobBackedFile(blob, DEMO_DATASET_FILE_NAME)
+}
+
+function createBlobBackedFile(blob, fileName) {
+  return {
+    name: fileName,
+    size: blob.size,
+    slice(start, end) {
+      return blob.slice(start, end)
+    },
+  }
+}
+
+async function parseDelimitedFile(file, loadToken, progressRange = { start: 0, end: 0.94 }) {
   const sampleText = await file.slice(0, Math.min(file.size, 256 * 1024)).text()
   assertActiveLoad(loadToken)
   const delimiter = detectDelimiter(sampleText.replace(/\uFEFF/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
   const parser = createDelimitedParser(delimiter)
   const chunkSize = chooseChunkSize(file.size)
+  const progressStart = progressRange.start ?? 0
+  const progressEnd = progressRange.end ?? 0.94
+  const progressSpan = Math.max(progressEnd - progressStart, 0)
 
   let offset = 0
   while (offset < file.size) {
@@ -426,7 +561,7 @@ async function parseDelimitedFile(file, loadToken) {
       message: parser.columns.length
         ? "The dataset is loading in chunks so the browser can keep updating the interface."
         : "Reading the header row and inferring the field structure.",
-      progress: file.size ? Math.min(offset / file.size * 0.94, 0.94) : 0.94,
+      progress: file.size ? Math.min(progressStart + offset / file.size * progressSpan, progressEnd) : progressEnd,
       loadedBytes: offset,
       totalBytes: file.size,
       parsedRows: parser.rowCount,
@@ -758,11 +893,18 @@ function handleStepShellClick(event) {
       return
     }
 
-    state.steps.preparation.confirmedFeatures = state.steps.preparation.selectedFeatures.slice()
+    const nextConfirmedFeatures = state.steps.preparation.selectedFeatures.slice()
+    const featureSelectionChanged = !areSameStringArrays(nextConfirmedFeatures, state.steps.preparation.confirmedFeatures)
+    state.steps.preparation.confirmedFeatures = nextConfirmedFeatures
+    refreshDownstreamStepsFromPreparationConfirmation(featureSelectionChanged)
     shouldScrollToPreparationDiagnostics = true
-    reconcileSelections()
+    reconcileSelections(featureSelectionChanged)
     recomputeAndRender("ui")
-    showToast("Selected variables confirmed for WOE, IV, and downstream modeling.")
+    showToast(
+      featureSelectionChanged
+        ? "Selected variables confirmed. All downstream tabs were refreshed from the new feature set."
+        : "Selected variables reconfirmed and downstream tabs were recalculated."
+    )
     return
   }
   if (action === "reset-document") {
@@ -885,6 +1027,13 @@ function autoSelectFeatures(availableFeatures) {
     ...availableFeatures.filter((feature) => !featurePriority.includes(feature)),
   ]
   return prioritized.slice(0, 10)
+}
+
+function refreshDownstreamStepsFromPreparationConfirmation(featureSelectionChanged) {
+  if (featureSelectionChanged) {
+    state.steps.estimation.modelFeatures = []
+  }
+  state.steps.scoring.selectedBuckets = {}
 }
 
 function recomputeAndRender(source = "ui") {
@@ -1391,7 +1540,7 @@ function renderScoringControls() {
       <div class="panel-section">
         <p class="card-kicker">Scenario input</p>
         <h3>Select one bucket per final feature</h3>
-        <p class="inline-note">Each dropdown is ordered by WOE within the corresponding feature so the analyst can review the strongest buckets first.</p>
+        <p class="inline-note">Each dropdown is ordered by WOE within the corresponding feature, while the labels show only the bucket values for cleaner scenario entry.</p>
         <div class="field-grid compact-grid">
           ${scoring.featureOptions
             .map(
@@ -1403,9 +1552,7 @@ function renderScoringControls() {
                     ${feature.options
                       .map(
                         (option) => `
-                          <option value="${escapeHtml(option.bucket)}" ${scoring.selectedBuckets[feature.name] === option.bucket ? "selected" : ""}>
-                            ${escapeHtml(option.bucket)} | WOE ${formatDecimal(option.woe, 3)} | Score ${formatInteger(option.score)}
-                          </option>
+                          <option value="${escapeHtml(option.bucket)}" ${scoring.selectedBuckets[feature.name] === option.bucket ? "selected" : ""}>${escapeHtml(option.bucket)}</option>
                         `
                       )
                       .join("")}
@@ -1642,9 +1789,9 @@ function renderPreparationResults() {
             <strong>${formatInteger(state.steps.preparation.confirmedFeatures.length)} confirmed variables</strong>
             <p>${
               hasPendingSelectionChanges
-                ? "The selection changed. Confirm again to refresh WOE, IV, and grouped-bucket diagnostics."
+                ? "The selection changed. Confirm again to refresh WOE, IV, estimation, scoring, validation, monitoring, calibration, and Basel diagnostics."
                 : state.steps.preparation.confirmedFeatures.length
-                  ? "WOE, IV, and estimation-bucket charts are based on the confirmed variables below."
+                  ? "WOE, IV, and all downstream tabs are currently based on the confirmed variables below."
                   : "Choose variables and confirm them before the simulator calculates WOE, IV, and grouped-bucket diagnostics."
             }</p>
           </div>
@@ -1905,26 +2052,26 @@ function renderScoringResults() {
               <p>Select one bucket for each final feature to calculate the final score and rating. Until then, the scorecard remains available on the right for reference.</p>
             </div>`
       }
-      <div class="panel-subgrid two-up">
-        <section class="table-card">
-          <div class="mini-heading">
-            <p class="card-kicker">Scenario output</p>
-            <h3>Selected bucket contributions</h3>
-          </div>
-          ${
-            scoring.complete
-              ? renderScorecardTable(scoring.selectedRows)
-              : renderEmptyState("The selected bucket contributions appear once every final feature has a chosen bucket.")
-          }
-        </section>
-        <section class="table-card">
-          <div class="mini-heading">
-            <p class="card-kicker">Reference scorecard</p>
-            <h3>All feature buckets</h3>
-          </div>
-          ${renderScorecardTable(scoring.scorecardRows)}
-        </section>
-      </div>
+      <section class="table-card">
+        <div class="mini-heading">
+          <p class="card-kicker">Scenario output</p>
+          <h3>Selected bucket contributions</h3>
+        </div>
+        ${
+          scoring.complete
+            ? renderScorecardTable(scoring.selectedRows)
+            : renderEmptyState("The selected bucket contributions appear once every final feature has a chosen bucket.")
+        }
+      </section>
+    </article>
+    <article class="card panel-card">
+      <section class="table-card">
+        <div class="mini-heading">
+          <p class="card-kicker">Reference scorecard</p>
+          <h3>All feature buckets</h3>
+        </div>
+        ${renderScorecardTable(scoring.scorecardRows)}
+      </section>
     </article>
   `
 }
@@ -4905,65 +5052,6 @@ function getEligibleFeatures() {
 
 function getStepDefinition(stepKey) {
   return STEP_DEFINITIONS.find((stepDefinition) => stepDefinition.key === stepKey)
-}
-
-function buildDemoDataset() {
-  const random = mulberry32(42)
-  const mortgageTypes = [
-    "Private Residential",
-    "Commercial Income Producing Real Estate",
-    "Private Income Producing Real Estate",
-  ]
-  const maritalStatuses = ["Single", "Married", "Divorced", "Widowed"]
-  const swissCantons = ["ZH", "BE", "LU", "ZG", "VD", "GE", "AG", "TI", "SG", "BS"]
-  const rows = []
-
-  for (let index = 0; index < 520; index += 1) {
-    const mortgageType = pick(random, mortgageTypes, [0.55, 0.2, 0.25])
-    const income = Math.round(45000 + random() * 180000)
-    const loanToValue = clamp(0.35 + random() * 0.65, 0.35, 0.98)
-    const delinquency = pick(random, [0, 15, 45, 120], [0.7, 0.18, 0.08, 0.04])
-    const maritalStatus = pick(random, maritalStatuses, [0.3, 0.5, 0.12, 0.08])
-    const swissCanton = pick(random, swissCantons)
-    const exposure = Math.round(70000 + random() * 530000)
-    const month = String((index % 12) + 1).padStart(2, "0")
-    const year = 2022 + Math.floor(index / 130)
-    const observationDate = `${year}-${month}-01`
-    const incomeBucket = income >= 120000 ? "Over 120k" : income >= 80000 ? "80-120k" : "50-80k"
-    const ltvBucket = loanToValue <= 0.5 ? "smaller than 50%" : "over 50%"
-
-    const logitScore =
-      -3.9 +
-      (mortgageType === "Private Residential" ? -0.4 : mortgageType === "Commercial Income Producing Real Estate" ? 0.2 : 0.1) +
-      (incomeBucket === "Over 120k" ? -0.5 : incomeBucket === "80-120k" ? -0.15 : 0.35) +
-      (loanToValue > 0.8 ? 0.9 : loanToValue > 0.6 ? 0.4 : -0.15) +
-      (delinquency >= 90 ? 1.4 : delinquency >= 30 ? 0.8 : delinquency > 0 ? 0.25 : -0.2) +
-      (maritalStatus === "Married" ? -0.15 : 0.05) +
-      (swissCanton === "GE" || swissCanton === "TI" ? 0.1 : -0.05)
-
-    const defaultProbability = sigmoid(logitScore)
-    const defaultFlag = random() < defaultProbability ? 1 : 0
-
-    rows.push({
-      Client_ID: `C${String(index + 1).padStart(5, "0")}`,
-      Observation_Date: observationDate,
-      Mortgage_Type: mortgageType,
-      Income: income,
-      Income_Bucket: incomeBucket,
-      Loan_to_Value: Number((loanToValue * 100).toFixed(2)),
-      LTV_Bucket: ltvBucket,
-      Marital_Status: maritalStatus,
-      Delinquency: delinquency,
-      Swiss_Canton: swissCanton,
-      Exposure: exposure,
-      Default_Flag: defaultFlag,
-    })
-  }
-
-  return {
-    columns: Object.keys(rows[0]),
-    rows,
-  }
 }
 
 function showToast(message) {
