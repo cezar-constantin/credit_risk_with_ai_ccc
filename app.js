@@ -199,6 +199,7 @@ const elements = {
   heroDataset: document.getElementById("hero-dataset"),
   heroRows: document.getElementById("hero-rows"),
   heroModelStatus: document.getElementById("hero-model-status"),
+  heroQrCard: document.getElementById("hero-qr-card"),
   workspaceStatus: document.getElementById("workspace-status"),
   fileInput: document.getElementById("file-input"),
   loadDemoButton: document.getElementById("load-demo-button"),
@@ -217,6 +218,11 @@ const elements = {
   previewCaption: document.getElementById("preview-caption"),
   stepShell: document.getElementById("active-step-shell"),
   toast: document.getElementById("toast"),
+  mobileStepNav: document.getElementById("mobile-step-nav"),
+  mobileStepLabel: document.getElementById("mobile-step-label"),
+  mobileStepMeta: document.getElementById("mobile-step-meta"),
+  mobileStepPrev: document.getElementById("mobile-step-prev"),
+  mobileStepNext: document.getElementById("mobile-step-next"),
   tabButtons: Array.from(document.querySelectorAll(".tab-button")),
 }
 
@@ -224,11 +230,13 @@ let toastTimer = null
 let activeLoadToken = 0
 let activeLoadAbortController = null
 let shouldScrollToPreparationDiagnostics = false
+let isMobileExperience = false
 let state = createInitialState()
 
 bootstrap()
 
 function bootstrap() {
+  initializeResponsiveMode()
   bindGlobalEvents()
   refreshDocuments("ui")
   renderAll()
@@ -288,6 +296,12 @@ function bindGlobalEvents() {
   elements.loadDemoButton.addEventListener("click", () => {
     void loadBundledDemoPortfolio()
   })
+  elements.mobileStepPrev.addEventListener("click", () => {
+    navigateStepByOffset(-1)
+  })
+  elements.mobileStepNext.addEventListener("click", () => {
+    navigateStepByOffset(1)
+  })
   elements.resetButton.addEventListener("click", () => {
     cancelActiveLoad()
     state = createInitialState()
@@ -313,11 +327,72 @@ function bindGlobalEvents() {
 
   elements.tabButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      state.activeStep = button.dataset.tabTarget
-      renderTabs()
-      renderActiveStep()
+      activateStep(button.dataset.tabTarget, { scrollToStep: isMobileExperience })
     })
   })
+}
+
+function initializeResponsiveMode() {
+  const syncResponsiveMode = () => {
+    const nextMode = detectMobileExperience()
+    if (nextMode === isMobileExperience && document.body.dataset.mobileModeReady === "true") {
+      return
+    }
+
+    isMobileExperience = nextMode
+    document.body.classList.toggle("is-mobile-device", isMobileExperience)
+    document.body.dataset.mobileModeReady = "true"
+    elements.mobileStepNav.hidden = !isMobileExperience
+    if (elements.heroQrCard) {
+      elements.heroQrCard.hidden = isMobileExperience
+    }
+
+    renderTabs()
+  }
+
+  syncResponsiveMode()
+  window.addEventListener("resize", syncResponsiveMode)
+  window.addEventListener("orientationchange", syncResponsiveMode)
+}
+
+function detectMobileExperience() {
+  const byViewport = window.matchMedia("(max-width: 860px)").matches
+  const byPointer = window.matchMedia("(pointer: coarse)").matches && window.matchMedia("(max-width: 1180px)").matches
+  const byAgent = Boolean(
+    window.navigator.userAgentData?.mobile ||
+    /Android|iPhone|iPad|iPod|Windows Phone|webOS|BlackBerry|Opera Mini/i.test(window.navigator.userAgent || "")
+  )
+  return byViewport || byPointer || byAgent
+}
+
+function activateStep(stepKey, options = {}) {
+  if (!getStepDefinition(stepKey)) {
+    return
+  }
+
+  state.activeStep = stepKey
+  renderTabs()
+  renderActiveStep()
+
+  if (options.scrollToStep) {
+    window.requestAnimationFrame(() => {
+      elements.stepShell.scrollIntoView({ behavior: "smooth", block: "start" })
+    })
+  }
+}
+
+function navigateStepByOffset(offset) {
+  const currentIndex = STEP_DEFINITIONS.findIndex((stepDefinition) => stepDefinition.key === state.activeStep)
+  if (currentIndex === -1) {
+    return
+  }
+
+  const nextStep = STEP_DEFINITIONS[currentIndex + offset]
+  if (!nextStep) {
+    return
+  }
+
+  activateStep(nextStep.key, { scrollToStep: true })
 }
 
 async function handleFileInput(event) {
@@ -1177,11 +1252,27 @@ function renderLoadingState() {
 }
 
 function renderTabs() {
+  const activeIndex = STEP_DEFINITIONS.findIndex((stepDefinition) => stepDefinition.key === state.activeStep)
+
   elements.tabButtons.forEach((button) => {
     const isActive = button.dataset.tabTarget === state.activeStep
     button.classList.toggle("is-active", isActive)
     button.setAttribute("aria-selected", String(isActive))
+    if (isActive && isMobileExperience) {
+      button.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" })
+    }
   })
+
+  elements.mobileStepNav.hidden = !isMobileExperience
+  if (activeIndex === -1) {
+    return
+  }
+
+  const activeStep = STEP_DEFINITIONS[activeIndex]
+  elements.mobileStepLabel.textContent = activeStep.label
+  elements.mobileStepMeta.textContent = `Step ${activeIndex + 1} of ${STEP_DEFINITIONS.length}`
+  elements.mobileStepPrev.disabled = activeIndex === 0
+  elements.mobileStepNext.disabled = activeIndex === STEP_DEFINITIONS.length - 1
 }
 
 function renderActiveStep() {

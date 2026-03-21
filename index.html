@@ -52,6 +52,7 @@
         </div>
         <a
           class="hero-qr-card"
+          id="hero-qr-card"
           href="https://cezar-constantin.github.io/credit_risk_with_ai/"
           target="_blank"
           rel="noreferrer"
@@ -133,6 +134,15 @@
       </section>
 
       <section class="tabs card" aria-label="Simulator stages">
+        <div class="mobile-step-nav" id="mobile-step-nav" hidden>
+          <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
+          <div class="mobile-step-current">
+            <span class="metric-label">Current step</span>
+            <strong id="mobile-step-label">Data preparation</strong>
+            <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 8</span>
+          </div>
+          <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
+        </div>
         <div class="tab-list" role="tablist">
           <button
             class="tab-button is-active"
