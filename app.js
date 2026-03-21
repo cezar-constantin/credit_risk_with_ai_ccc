@@ -16,6 +16,14 @@
       "Select the final drivers, fit a browser-side logistic scorecard, and translate the model into rating grades, scorecard contributions, and portable R code.",
   },
   {
+    key: "scoring",
+    label: "Scoring",
+    kicker: "Application",
+    title: "Score a single case with the estimated scorecard",
+    description:
+      "Inspect the bucket-level scorecard, select one bucket per final feature, and calculate the implied score, PD, and rating for an individual scenario.",
+  },
+  {
     key: "validation",
     label: "Validation of rating model",
     kicker: "Challenge",
@@ -89,6 +97,7 @@ const DEFAULT_STEP_CONFIGS = {
     monitoringShare: 10,
     calibrationShare: 10,
     selectedFeatures: [],
+    confirmedFeatures: [],
   },
   estimation: {
     ivThreshold: 0.05,
@@ -97,6 +106,9 @@ const DEFAULT_STEP_CONFIGS = {
     scoreOffset: 218,
     scoreFactor: -72,
     modelFeatures: [],
+  },
+  scoring: {
+    selectedBuckets: {},
   },
   validation: {
     classificationThreshold: 0.5,
@@ -151,6 +163,10 @@ const DEFAULT_NOTES = {
     code: "Document modeling decisions such as exclusions, challenger tests, or score scaling changes here.",
     methodology: "Capture model design choices, expert overlays, or approval remarks here.",
   },
+  scoring: {
+    code: "Document manual overrides, use-test scenarios, or score interpretation notes here.",
+    methodology: "Add decision-use assumptions, scenario definitions, or approval guidance here.",
+  },
   validation: {
     code: "Note validation overrides, benchmark models, or additional challenge tests here.",
     methodology: "Summarize independent review commentary or remediation expectations here.",
@@ -174,6 +190,8 @@ const DEFAULT_NOTES = {
 }
 
 const HERO_EMPTY_MODEL_TEXT = "No model estimated"
+const MAX_TRACKED_DISTINCT_VALUES = 51
+const ALLOWED_BINARY_VALUES = new Set(["0", "1", "true", "false", "yes", "no", "default", "non-default", "good", "bad"])
 
 const elements = {
   heroDataset: document.getElementById("hero-dataset"),
@@ -186,6 +204,12 @@ const elements = {
   exportFullRButton: document.getElementById("export-full-r-button"),
   exportFullPdfButton: document.getElementById("export-full-pdf-button"),
   datasetMetrics: document.getElementById("dataset-metrics"),
+  loadingCard: document.getElementById("loading-card"),
+  loadingTitle: document.getElementById("loading-title"),
+  loadingCopy: document.getElementById("loading-copy"),
+  loadingPercent: document.getElementById("loading-percent"),
+  loadingProgressFill: document.getElementById("loading-progress-fill"),
+  loadingMeta: document.getElementById("loading-meta"),
   globalFieldGrid: document.getElementById("global-field-grid"),
   datasetPreview: document.getElementById("dataset-preview"),
   previewCaption: document.getElementById("preview-caption"),
@@ -195,12 +219,15 @@ const elements = {
 }
 
 let toastTimer = null
+let activeLoadToken = 0
+let shouldScrollToPreparationDiagnostics = false
 let state = createInitialState()
 
 bootstrap()
 
 function bootstrap() {
   bindGlobalEvents()
+  refreshDocuments("ui")
   renderAll()
 }
 
@@ -210,11 +237,26 @@ function createInitialState() {
     datasetName: "",
     rows: [],
     metadata: null,
+    loading: createLoadingState(),
     global: clone(DEFAULT_GLOBAL_CONFIG),
     steps: clone(DEFAULT_STEP_CONFIGS),
     notes: clone(DEFAULT_NOTES),
     documents: buildEmptyDocuments(),
+    documentWindows: buildDocumentWindowState(),
     derived: {},
+  }
+}
+
+function createLoadingState() {
+  return {
+    active: false,
+    fileName: "",
+    phase: "",
+    message: "",
+    progress: 0,
+    loadedBytes: 0,
+    totalBytes: 0,
+    parsedRows: 0,
   }
 }
 
@@ -228,16 +270,29 @@ function buildEmptyDocuments() {
   }, {})
 }
 
+function buildDocumentWindowState() {
+  return STEP_DEFINITIONS.reduce((accumulator, stepDefinition) => {
+    accumulator[stepDefinition.key] = {
+      code: false,
+      methodology: false,
+    }
+    return accumulator
+  }, {})
+}
+
 function bindGlobalEvents() {
   elements.fileInput.addEventListener("change", handleFileInput)
   elements.loadDemoButton.addEventListener("click", () => {
+    cancelActiveLoad()
     const demo = buildDemoDataset()
     hydrateDataset(demo.rows, demo.columns, "demo_credit_portfolio.csv")
     showToast("Demo portfolio loaded.")
   })
   elements.resetButton.addEventListener("click", () => {
+    cancelActiveLoad()
     state = createInitialState()
     elements.fileInput.value = ""
+    refreshDocuments("ui")
     renderAll()
     showToast("Simulator reset.")
   })
@@ -271,14 +326,347 @@ async function handleFileInput(event) {
     return
   }
 
+  elements.fileInput.value = ""
+  const loadToken = startLoadingSession(file)
+
   try {
-    const text = await file.text()
-    const parsed = parseDelimitedText(text)
-    hydrateDataset(parsed.rows, parsed.columns, file.name)
+    await waitForNextFrame()
+    const parsed = await parseDelimitedFile(file, loadToken)
+    assertActiveLoad(loadToken)
+    setLoadingState({
+      phase: "Finalizing upload",
+      message: "Preparing the simulator workspace, field mapping, and initial documentation.",
+      progress: 0.98,
+      loadedBytes: file.size,
+      totalBytes: file.size,
+      parsedRows: parsed.rows.length,
+    })
+    await waitForNextFrame()
+    hydrateDataset(parsed.rows, parsed.columns, file.name, parsed.metadata)
+    clearLoadingState(true)
     showToast(`Loaded ${file.name}.`)
   } catch (error) {
+    if (isCancelledLoad(error)) {
+      return
+    }
+    clearLoadingState(true)
     showToast(`Could not parse the uploaded file: ${error.message}`)
   }
+}
+
+function startLoadingSession(file) {
+  activeLoadToken += 1
+  const loadToken = activeLoadToken
+  state.loading = {
+    active: true,
+    fileName: file.name,
+    phase: "Preparing upload",
+    message: "Opening the file and switching to an incremental parser for large datasets.",
+    progress: 0,
+    loadedBytes: 0,
+    totalBytes: file.size,
+    parsedRows: 0,
+  }
+  renderAll()
+  return loadToken
+}
+
+function cancelActiveLoad() {
+  activeLoadToken += 1
+  clearLoadingState()
+}
+
+function assertActiveLoad(loadToken) {
+  if (loadToken !== activeLoadToken) {
+    const cancellationError = new Error("Upload cancelled.")
+    cancellationError.name = "LoadCancelledError"
+    throw cancellationError
+  }
+}
+
+function isCancelledLoad(error) {
+  return error?.name === "LoadCancelledError"
+}
+
+function setLoadingState(partialState) {
+  state.loading = {
+    ...state.loading,
+    ...partialState,
+    active: true,
+  }
+  renderLoadingState()
+}
+
+function clearLoadingState(shouldRerender = false) {
+  state.loading = createLoadingState()
+  if (shouldRerender) {
+    renderAll()
+    return
+  }
+  renderLoadingState()
+}
+
+async function parseDelimitedFile(file, loadToken) {
+  const sampleText = await file.slice(0, Math.min(file.size, 256 * 1024)).text()
+  assertActiveLoad(loadToken)
+  const delimiter = detectDelimiter(sampleText.replace(/\uFEFF/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
+  const parser = createDelimitedParser(delimiter)
+  const chunkSize = chooseChunkSize(file.size)
+
+  let offset = 0
+  while (offset < file.size) {
+    const end = Math.min(offset + chunkSize, file.size)
+    const chunkText = await file.slice(offset, end).text()
+    assertActiveLoad(loadToken)
+    consumeDelimitedChunk(parser, chunkText)
+    offset = end
+
+    setLoadingState({
+      phase: parser.columns.length ? "Parsing rows" : "Scanning header",
+      message: parser.columns.length
+        ? "The dataset is loading in chunks so the browser can keep updating the interface."
+        : "Reading the header row and inferring the field structure.",
+      progress: file.size ? Math.min(offset / file.size * 0.94, 0.94) : 0.94,
+      loadedBytes: offset,
+      totalBytes: file.size,
+      parsedRows: parser.rowCount,
+    })
+    await waitForNextFrame()
+  }
+
+  finalizeDelimitedParser(parser)
+  assertActiveLoad(loadToken)
+
+  if (!parser.columns.length || !parser.rowCount) {
+    throw new Error("The file does not contain a header row plus data.")
+  }
+
+  return {
+    columns: parser.columns,
+    rows: parser.rows,
+    metadata: buildMetadataFromAccumulators(parser.rows, parser.columns, parser.columnAccumulators),
+  }
+}
+
+function chooseChunkSize(fileSize) {
+  if (fileSize >= 300 * 1024 * 1024) {
+    return 4 * 1024 * 1024
+  }
+  if (fileSize >= 100 * 1024 * 1024) {
+    return 3 * 1024 * 1024
+  }
+  return 2 * 1024 * 1024
+}
+
+function createDelimitedParser(delimiter) {
+  return {
+    delimiter,
+    currentField: "",
+    currentRow: [],
+    inQuotes: false,
+    pendingQuote: false,
+    pendingLineFeed: false,
+    strippedBom: false,
+    columns: [],
+    rows: [],
+    rowCount: 0,
+    columnAccumulators: [],
+  }
+}
+
+function consumeDelimitedChunk(parser, rawChunk) {
+  if (!rawChunk) {
+    return
+  }
+
+  let chunk = rawChunk
+  if (!parser.strippedBom) {
+    chunk = chunk.replace(/^\uFEFF/, "")
+    parser.strippedBom = true
+  }
+
+  let index = 0
+  if (parser.pendingLineFeed) {
+    if (chunk.startsWith("\n")) {
+      index = 1
+    }
+    parser.pendingLineFeed = false
+  }
+
+  if (parser.pendingQuote) {
+    if (chunk[index] === '"') {
+      parser.currentField += '"'
+      index += 1
+    } else {
+      parser.inQuotes = false
+    }
+    parser.pendingQuote = false
+  }
+
+  for (; index < chunk.length; index += 1) {
+    const character = chunk[index]
+    const nextCharacter = chunk[index + 1]
+
+    if (character === '"') {
+      if (parser.inQuotes && nextCharacter === '"') {
+        parser.currentField += '"'
+        index += 1
+      } else if (parser.inQuotes && nextCharacter === undefined) {
+        parser.pendingQuote = true
+      } else {
+        parser.inQuotes = !parser.inQuotes
+      }
+      continue
+    }
+
+    if (!parser.inQuotes && character === parser.delimiter) {
+      parser.currentRow.push(parser.currentField)
+      parser.currentField = ""
+      continue
+    }
+
+    if (!parser.inQuotes && character === "\n") {
+      parser.currentRow.push(parser.currentField)
+      parser.currentField = ""
+      commitParsedRow(parser)
+      continue
+    }
+
+    if (!parser.inQuotes && character === "\r") {
+      parser.currentRow.push(parser.currentField)
+      parser.currentField = ""
+      commitParsedRow(parser)
+      if (nextCharacter === "\n") {
+        index += 1
+      } else if (index === chunk.length - 1) {
+        parser.pendingLineFeed = true
+      }
+      continue
+    }
+
+    parser.currentField += character
+  }
+}
+
+function finalizeDelimitedParser(parser) {
+  if (parser.pendingQuote) {
+    parser.pendingQuote = false
+    parser.inQuotes = false
+  }
+  if (parser.currentField.length || parser.currentRow.length) {
+    parser.currentRow.push(parser.currentField)
+    parser.currentField = ""
+    commitParsedRow(parser)
+  }
+}
+
+function commitParsedRow(parser) {
+  if (!parser.currentRow.some((field) => normalizeCell(field) !== "")) {
+    parser.currentRow = []
+    return
+  }
+
+  if (!parser.columns.length) {
+    parser.columns = deduplicateHeaders(
+      parser.currentRow.map((header, index) => normalizeHeader(header) || `Column_${index + 1}`)
+    )
+    parser.columnAccumulators = parser.columns.map((columnName) => createColumnAccumulator(columnName))
+    parser.currentRow = []
+    return
+  }
+
+  const rowObject = {}
+  for (let columnIndex = 0; columnIndex < parser.columns.length; columnIndex += 1) {
+    const columnName = parser.columns[columnIndex]
+    const normalizedValue = normalizeCell(parser.currentRow[columnIndex] ?? "")
+    rowObject[columnName] = normalizedValue
+    updateColumnAccumulator(parser.columnAccumulators[columnIndex], normalizedValue)
+  }
+
+  parser.rows.push(rowObject)
+  parser.rowCount += 1
+  parser.currentRow = []
+}
+
+function createColumnAccumulator(columnName) {
+  return {
+    name: columnName,
+    rawCount: 0,
+    nonEmptyCount: 0,
+    numericCount: 0,
+    dateCount: 0,
+    distinctValues: new Set(),
+    distinctOverflow: false,
+    binaryValues: new Set(),
+  }
+}
+
+function updateColumnAccumulator(accumulator, value) {
+  accumulator.rawCount += 1
+  const normalizedValue = normalizeCell(value)
+  if (normalizedValue === "") {
+    return
+  }
+
+  accumulator.nonEmptyCount += 1
+
+  if (Number.isFinite(parseLooseNumber(normalizedValue))) {
+    accumulator.numericCount += 1
+  }
+  if (parseLooseDate(normalizedValue) !== null) {
+    accumulator.dateCount += 1
+  }
+
+  if (!accumulator.distinctOverflow) {
+    accumulator.distinctValues.add(normalizedValue)
+    if (accumulator.distinctValues.size > MAX_TRACKED_DISTINCT_VALUES) {
+      accumulator.distinctOverflow = true
+    }
+  }
+
+  if (accumulator.binaryValues.size <= 2) {
+    accumulator.binaryValues.add(normalizedValue.toLowerCase())
+  }
+}
+
+function buildMetadataFromAccumulators(rows, columns, columnAccumulators) {
+  const columnStats = columnAccumulators.map((accumulator) => finalizeColumnAccumulator(accumulator))
+  const columnMap = Object.fromEntries(columnStats.map((columnStat) => [columnStat.name, columnStat]))
+  return {
+    rows,
+    columns,
+    columnStats,
+    columnMap,
+  }
+}
+
+function finalizeColumnAccumulator(accumulator) {
+  const numericShare = accumulator.nonEmptyCount ? accumulator.numericCount / accumulator.nonEmptyCount : 0
+  const dateShare = accumulator.nonEmptyCount ? accumulator.dateCount / accumulator.nonEmptyCount : 0
+  const distinctValues = accumulator.distinctOverflow
+    ? Math.max(accumulator.distinctValues.size, MAX_TRACKED_DISTINCT_VALUES + 1)
+    : accumulator.distinctValues.size
+  const type = looksBinaryFromSet(accumulator.binaryValues, accumulator.nonEmptyCount)
+    ? "binary"
+    : dateShare > 0.7
+      ? "date"
+      : numericShare > 0.8
+        ? "numeric"
+        : "categorical"
+
+  return {
+    name: accumulator.name,
+    type,
+    missingRate: accumulator.rawCount ? 1 - accumulator.nonEmptyCount / accumulator.rawCount : 0,
+    distinctValues,
+  }
+}
+
+function looksBinaryFromSet(values, nonEmptyCount) {
+  if (!nonEmptyCount || nonEmptyCount < 3) {
+    return false
+  }
+  return values.size > 0 && values.size <= 2 && Array.from(values).every((value) => ALLOWED_BINARY_VALUES.has(value))
 }
 
 function handleGlobalFieldChange(event) {
@@ -317,6 +705,16 @@ function handleStepShellChange(event) {
     toggleArrayValue(state.steps.estimation.modelFeatures, target.value, target.checked)
     reconcileSelections()
     recomputeAndRender("ui")
+    return
+  }
+
+  if (action === "set-scoring-bucket") {
+    const featureName = target.dataset.featureName
+    state.steps.scoring.selectedBuckets = {
+      ...state.steps.scoring.selectedBuckets,
+      [featureName]: target.value,
+    }
+    recomputeAndRender("ui")
   }
 }
 
@@ -343,10 +741,40 @@ function handleStepShellClick(event) {
     saveDocument(trigger.dataset.stepKey, trigger.dataset.documentType)
     return
   }
+  if (action === "toggle-document-window") {
+    const stepKey = trigger.dataset.stepKey
+    const documentType = trigger.dataset.documentType
+    state.documentWindows[stepKey][documentType] = !state.documentWindows[stepKey][documentType]
+    renderActiveStep()
+    return
+  }
+  if (action === "confirm-preparation-features") {
+    if (!state.global.targetColumn) {
+      showToast("Map the target column before confirming variables.")
+      return
+    }
+    if (!state.steps.preparation.selectedFeatures.length) {
+      showToast("Select at least one variable before confirming.")
+      return
+    }
+
+    state.steps.preparation.confirmedFeatures = state.steps.preparation.selectedFeatures.slice()
+    shouldScrollToPreparationDiagnostics = true
+    reconcileSelections()
+    recomputeAndRender("ui")
+    showToast("Selected variables confirmed for WOE, IV, and downstream modeling.")
+    return
+  }
   if (action === "reset-document") {
     refreshDocumentsForStep(trigger.dataset.stepKey)
     renderActiveStep()
     showToast("Editor reset from the live simulator state.")
+    return
+  }
+  if (action === "clear-scoring-scenario") {
+    state.steps.scoring.selectedBuckets = {}
+    recomputeAndRender("ui")
+    showToast("Scoring selections cleared.")
     return
   }
   if (action === "export-code") {
@@ -356,7 +784,15 @@ function handleStepShellClick(event) {
     downloadTextFile(fileName, state.documents[stepKey].code)
     return
   }
-  if (action === "export-methodology") {
+  if (action === "export-methodology-tex") {
+    const stepKey = trigger.dataset.stepKey
+    const stepDefinition = getStepDefinition(stepKey)
+    const title = `${stepDefinition.label} - Methodology`
+    const fileName = `${sanitizeFileStem(stepDefinition.label)}-methodology.tex`
+    downloadTextFile(fileName, buildStandaloneLatexDocument(title, stripMethodologyArtifacts(state.documents[stepKey].methodology)))
+    return
+  }
+  if (action === "export-methodology-pdf") {
     const stepKey = trigger.dataset.stepKey
     const stepDefinition = getStepDefinition(stepKey)
     const title = `${stepDefinition.label} - Methodology`
@@ -365,10 +801,10 @@ function handleStepShellClick(event) {
   }
 }
 
-function hydrateDataset(rows, columns, datasetName) {
+function hydrateDataset(rows, columns, datasetName, metadata = null) {
   state.datasetName = datasetName
   state.rows = rows
-  state.metadata = analyzeDataset(rows, columns)
+  state.metadata = metadata ?? analyzeDataset(rows, columns)
   autoMapColumns()
   reconcileSelections(true)
   recomputeAndRender("ui")
@@ -411,13 +847,17 @@ function reconcileSelections(forceAutoFill = false) {
 
   const availableFeatures = getEligibleFeatures()
   const selectedPreparation = state.steps.preparation.selectedFeatures.filter((feature) => availableFeatures.includes(feature))
-  const selectedEstimation = state.steps.estimation.modelFeatures.filter((feature) => availableFeatures.includes(feature))
+  const confirmedPreparation = state.steps.preparation.confirmedFeatures.filter((feature) => availableFeatures.includes(feature))
+  const selectedEstimation = state.steps.estimation.modelFeatures.filter((feature) => confirmedPreparation.includes(feature))
 
   state.steps.preparation.selectedFeatures =
-    forceAutoFill || !selectedPreparation.length ? autoSelectFeatures(availableFeatures) : selectedPreparation
+    forceAutoFill && !selectedPreparation.length ? autoSelectFeatures(availableFeatures) : selectedPreparation
+  state.steps.preparation.confirmedFeatures = confirmedPreparation
   state.steps.estimation.modelFeatures =
-    forceAutoFill || !selectedEstimation.length
-      ? state.steps.preparation.selectedFeatures.slice(0, Math.min(availableFeatures.length, 8))
+    !confirmedPreparation.length
+      ? []
+      : forceAutoFill || !selectedEstimation.length
+        ? confirmedPreparation.slice(0, Math.min(confirmedPreparation.length, 8))
       : selectedEstimation
 
   for (const globalKey of Object.keys(DEFAULT_GLOBAL_CONFIG)) {
@@ -449,12 +889,14 @@ function autoSelectFeatures(availableFeatures) {
 
 function recomputeAndRender(source = "ui") {
   if (!state.metadata) {
+    refreshDocuments(source)
     renderAll()
     return
   }
 
   const preparation = computePreparation()
   const estimation = computeEstimation(preparation)
+  const scoring = computeScoring(estimation)
   const validation = computeValidation(estimation)
   const monitoring = computeMonitoring(estimation)
   const calibration = computeCalibration(estimation)
@@ -464,6 +906,7 @@ function recomputeAndRender(source = "ui") {
   state.derived = {
     preparation,
     estimation,
+    scoring,
     validation,
     monitoring,
     calibration,
@@ -503,16 +946,25 @@ function saveDocument(stepKey, documentType) {
 function renderAll() {
   renderHero()
   renderWorkspace()
+  renderLoadingState()
   renderTabs()
   renderActiveStep()
+  revealPreparationDiagnosticsIfNeeded()
 }
 
 function renderHero() {
   const estimation = state.derived.estimation
-  elements.heroDataset.textContent = state.datasetName || "Waiting for upload"
-  elements.heroRows.textContent = state.rows.length ? `${formatInteger(state.rows.length)} loaded` : "0 loaded"
+  const isLoading = state.loading.active
+  elements.heroDataset.textContent = isLoading ? state.loading.fileName || state.datasetName || "Waiting for upload" : state.datasetName || "Waiting for upload"
+  elements.heroRows.textContent = isLoading
+    ? `${formatInteger(state.loading.parsedRows)} parsed so far`
+    : state.rows.length
+      ? `${formatInteger(state.rows.length)} loaded`
+      : "0 loaded"
 
-  if (estimation?.ready) {
+  if (isLoading) {
+    elements.heroModelStatus.textContent = "Upload in progress"
+  } else if (estimation?.ready) {
     elements.heroModelStatus.textContent = `Live scorecard with ${estimation.finalFeatures.length} features`
   } else if (state.derived.preparation?.ready) {
     elements.heroModelStatus.textContent = "Data prepared, model not estimated"
@@ -523,18 +975,56 @@ function renderHero() {
 
 function renderWorkspace() {
   const metadata = state.metadata
-  elements.workspaceStatus.textContent = metadata
-    ? state.global.targetColumn
-      ? "Portfolio ready for modeling"
-      : "Map the target column"
-    : "Waiting for a dataset"
+  const isLoading = state.loading.active
+  elements.workspaceStatus.textContent = isLoading
+    ? `Loading ${state.loading.fileName || "dataset"}`
+    : metadata
+      ? state.global.targetColumn
+        ? "Portfolio ready for modeling"
+        : "Map the target column"
+      : "Waiting for a dataset"
 
   elements.datasetMetrics.innerHTML = renderDatasetMetrics()
   elements.globalFieldGrid.innerHTML = renderGlobalFieldGrid()
-  elements.previewCaption.textContent = metadata
-    ? `${formatInteger(metadata.rows.length)} rows and ${formatInteger(metadata.columns.length)} columns available.`
-    : "Load a portfolio to inspect its structure."
-  elements.datasetPreview.innerHTML = metadata ? renderPreviewTable() : renderEmptyState("No dataset loaded yet.")
+  elements.previewCaption.textContent = isLoading
+    ? `${formatBytes(state.loading.loadedBytes)} read so far.`
+    : metadata
+      ? `${formatInteger(metadata.rows.length)} rows and ${formatInteger(metadata.columns.length)} columns available.`
+      : "Load a portfolio to inspect its structure."
+  elements.datasetPreview.innerHTML = metadata
+    ? renderPreviewTable()
+    : isLoading
+      ? renderEmptyState("The dataset preview appears as soon as parsing completes.")
+      : renderEmptyState("No dataset loaded yet.")
+}
+
+function renderLoadingState() {
+  const loading = state.loading
+  elements.loadingCard.hidden = !loading.active
+  if (!loading.active) {
+    elements.loadingProgressFill.style.width = "0%"
+    return
+  }
+
+  const percent = Math.round(clamp(loading.progress, 0, 1) * 100)
+  elements.loadingTitle.textContent = loading.phase || "Loading dataset"
+  elements.loadingCopy.textContent = loading.message || "The file is still loading."
+  elements.loadingPercent.textContent = `${percent}%`
+  elements.loadingProgressFill.style.width = `${percent}%`
+  elements.heroDataset.textContent = loading.fileName || "Waiting for upload"
+  elements.heroRows.textContent = `${formatInteger(loading.parsedRows)} parsed so far`
+  elements.heroModelStatus.textContent = "Upload in progress"
+  elements.workspaceStatus.textContent = `Loading ${loading.fileName || "dataset"}`
+  elements.previewCaption.textContent = `${formatBytes(loading.loadedBytes)} read so far.`
+
+  const metaParts = []
+  if (loading.totalBytes) {
+    metaParts.push(`${formatBytes(loading.loadedBytes)} / ${formatBytes(loading.totalBytes)}`)
+  }
+  if (loading.parsedRows) {
+    metaParts.push(`${formatInteger(loading.parsedRows)} data rows parsed`)
+  }
+  elements.loadingMeta.textContent = metaParts.join(" | ")
 }
 
 function renderTabs() {
@@ -548,7 +1038,7 @@ function renderTabs() {
 function renderActiveStep() {
   const stepDefinition = getStepDefinition(state.activeStep)
   const derived = state.derived[state.activeStep]
-  const statusText = derived?.ready ? "Live" : state.metadata ? "Needs attention" : "Template mode"
+  const statusText = state.loading.active ? "Loading" : derived?.ready ? "Live" : state.metadata ? "Needs attention" : "Template mode"
 
   elements.stepShell.innerHTML = `
     <section class="card step-card">
@@ -567,9 +1057,9 @@ function renderActiveStep() {
         <section class="result-column">
           ${renderStepResults(stepDefinition.key)}
         </section>
-        <section class="editor-column">
-          ${renderEditors(stepDefinition.key)}
-        </section>
+      </div>
+      <div class="step-document-row">
+        ${renderEditors(stepDefinition.key)}
       </div>
     </section>
   `
@@ -581,6 +1071,8 @@ function renderStepControls(stepKey) {
       return renderPreparationControls()
     case "estimation":
       return renderEstimationControls()
+    case "scoring":
+      return renderScoringControls()
     case "validation":
       return renderValidationControls()
     case "monitoring":
@@ -602,6 +1094,8 @@ function renderStepResults(stepKey) {
       return renderPreparationResults()
     case "estimation":
       return renderEstimationResults()
+    case "scoring":
+      return renderScoringResults()
     case "validation":
       return renderValidationResults()
     case "monitoring":
@@ -619,47 +1113,89 @@ function renderStepResults(stepKey) {
 
 function renderEditors(stepKey) {
   const documents = state.documents[stepKey]
-  const stepLabel = getStepDefinition(stepKey).label
+  const windows = state.documentWindows[stepKey]
 
   return `
-    <article class="card editor-card">
-      <div class="editor-header">
+    <section class="document-launcher-shell">
+      <div class="document-launchers">
+        <button
+          class="${windows.code ? "primary-button" : "secondary-button"} document-toggle-button"
+          type="button"
+          data-action="toggle-document-window"
+          data-step-key="${stepKey}"
+          data-document-type="code"
+        >
+          ${windows.code ? "Hide R Code" : "Show R Code"}
+        </button>
+        <button
+          class="${windows.methodology ? "primary-button" : "secondary-button"} document-toggle-button"
+          type="button"
+          data-action="toggle-document-window"
+          data-step-key="${stepKey}"
+          data-document-type="methodology"
+        >
+          ${windows.methodology ? "Hide LaTeX Methodology" : "Show LaTeX Methodology"}
+        </button>
+      </div>
+      ${windows.code
+        ? renderDocumentWindow(
+            stepKey,
+            "code",
+            "R code window",
+            "Review or edit the generated R implementation, then export it as an .R file.",
+            documents.code
+          )
+        : ""}
+      ${windows.methodology
+        ? renderDocumentWindow(
+            stepKey,
+            "methodology",
+            "LaTeX methodology window",
+            "Review or edit the generated LaTeX methodology, then export it as a .tex file or print it as a PDF of the source.",
+            documents.methodology
+          )
+        : ""}
+    </section>
+  `
+}
+
+function renderDocumentWindow(stepKey, documentType, title, helperCopy, content) {
+  const isCode = documentType === "code"
+  const methodologyButtons = isCode
+    ? `<button class="secondary-button small-button" type="button" data-action="export-code" data-step-key="${stepKey}">Export .R</button>`
+    : `<button class="secondary-button small-button" type="button" data-action="export-methodology-tex" data-step-key="${stepKey}">Export .tex</button>
+       <button class="ghost-button small-button" type="button" data-action="export-methodology-pdf" data-step-key="${stepKey}">Export PDF</button>`
+  return `
+    <article class="document-window">
+      <div class="document-window-header">
         <div>
-          <p class="card-kicker">R implementation</p>
-          <h3>${escapeHtml(stepLabel)} code</h3>
+          <p class="card-kicker">${isCode ? "Generated R" : "Generated LaTeX methodology"}</p>
+          <h3>${escapeHtml(title)}</h3>
         </div>
         <div class="editor-toolbar">
-          <button class="primary-button small-button" type="button" data-action="save-document" data-step-key="${stepKey}" data-document-type="code">Save &amp; Sync</button>
-          <button class="ghost-button small-button" type="button" data-action="reset-document" data-step-key="${stepKey}" data-document-type="code">Reset</button>
-          <button class="secondary-button small-button" type="button" data-action="export-code" data-step-key="${stepKey}">Export .R</button>
+          <button class="primary-button small-button" type="button" data-action="save-document" data-step-key="${stepKey}" data-document-type="${documentType}">Save &amp; Sync</button>
+          <button class="ghost-button small-button" type="button" data-action="reset-document" data-step-key="${stepKey}" data-document-type="${documentType}">Reset</button>
+          ${methodologyButtons}
         </div>
       </div>
-      <p class="editor-tip">Edit the sync JSON block or the analyst notes block, then click <strong>Save &amp; Sync</strong>.</p>
-      <textarea class="editor-textarea" data-action="edit-document" data-step-key="${stepKey}" data-document-type="code" spellcheck="false">${escapeHtml(
-        documents.code
-      )}</textarea>
-    </article>
-    <article class="card editor-card">
-      <div class="editor-header">
-        <div>
-          <p class="card-kicker">Methodology</p>
-          <h3>${escapeHtml(stepLabel)} narrative</h3>
-        </div>
-        <div class="editor-toolbar">
-          <button class="primary-button small-button" type="button" data-action="save-document" data-step-key="${stepKey}" data-document-type="methodology">Save &amp; Sync</button>
-          <button class="ghost-button small-button" type="button" data-action="reset-document" data-step-key="${stepKey}" data-document-type="methodology">Reset</button>
-          <button class="secondary-button small-button" type="button" data-action="export-methodology" data-step-key="${stepKey}">Export PDF</button>
-        </div>
-      </div>
-      <p class="editor-tip">The methodology window mirrors the live setup and keeps a parseable state block at the top.</p>
-      <textarea class="editor-textarea is-tall" data-action="edit-document" data-step-key="${stepKey}" data-document-type="methodology" spellcheck="false">${escapeHtml(
-        documents.methodology
+      <p class="editor-tip">${escapeHtml(helperCopy)}</p>
+      <textarea class="editor-textarea ${isCode ? "" : "is-tall"}" data-action="edit-document" data-step-key="${stepKey}" data-document-type="${documentType}" spellcheck="false">${escapeHtml(
+        content
       )}</textarea>
     </article>
   `
 }
 
 function renderDatasetMetrics() {
+  if (!state.metadata && state.loading.active) {
+    return [
+      renderMetricTile("Rows parsed", formatInteger(state.loading.parsedRows), "Rows already converted into the browser workspace."),
+      renderMetricTile("Loaded", formatBytes(state.loading.loadedBytes), "Bytes read from the uploaded file so far."),
+      renderMetricTile("Progress", `${Math.round(clamp(state.loading.progress, 0, 1) * 100)}%`, "Incremental parsing keeps the interface responsive."),
+      renderMetricTile("Status", escapeHtml(state.loading.phase || "Preparing upload"), "The parser continues in the background of the interface."),
+    ].join("")
+  }
+
   if (!state.metadata) {
     return [
       renderMetricTile("Rows", "0", "Upload a portfolio or load the demo sample."),
@@ -687,22 +1223,20 @@ function renderDatasetMetrics() {
 }
 
 function renderGlobalFieldGrid() {
+  if (!state.metadata && state.loading.active) {
+    return renderEmptyState("Field mapping unlocks automatically after the dataset structure has been parsed.")
+  }
+
   const options = state.metadata ? state.metadata.columns : []
   return `
     ${renderGlobalSelectField("Target column", "targetColumn", options, state.global.targetColumn, "Used as the default / non-default flag.")}
-    ${renderGlobalSelectField("ID column", "idColumn", options, state.global.idColumn, "Optional identifier for the portfolio rows.")}
     ${renderGlobalSelectField("Date column", "dateColumn", options, state.global.dateColumn, "Used for chronological splits when available.")}
-    ${renderGlobalSelectField("Exposure column", "exposureColumn", options, state.global.exposureColumn, "Optional EAD source for Basel views.")}
-    ${renderGlobalSelectField("LTV column", "ltvColumn", options, state.global.ltvColumn, "Optional LTV source for Basel IV segmentation.")}
-    ${renderGlobalSelectField("Exposure type column", "exposureTypeColumn", options, state.global.exposureTypeColumn, "Optional mortgage or exposure class field.")}
-    ${renderGlobalSelectField("LGD column", "lgdColumn", options, state.global.lgdColumn, "Optional LGD source for capital calculations.")}
-    ${renderGlobalSelectField("Maturity column", "maturityColumn", options, state.global.maturityColumn, "Optional maturity source in years.")}
   `
 }
 
 function renderPreviewTable() {
-  const columns = state.metadata.columns.slice(0, 8)
-  const rows = state.rows.slice(0, 5)
+  const columns = state.metadata.columns
+  const rows = state.rows.slice(0, 10)
   return renderTable(
     columns,
     rows.map((row) =>
@@ -716,7 +1250,8 @@ function renderPreviewTable() {
 
 function renderPreparationControls() {
   const config = state.steps.preparation
-  const features = getEligibleFeatures()
+  const preparation = state.derived.preparation
+  const missingPolicy = config.missingStrategy === "median_mode" ? "Median / mode" : "Missing bucket"
 
   return `
     <article class="card panel-card">
@@ -757,15 +1292,56 @@ function renderPreparationControls() {
         <p class="inline-note">Shares are normalized to 100% before the simulator assigns the samples.</p>
       </div>
       <div class="panel-section">
-        <p class="card-kicker">Human in the loop</p>
-        <h3>Selected variables</h3>
-        ${
-          features.length
-            ? `<div class="feature-list">${features
-                .map((feature) => renderFeatureOption(feature, state.steps.preparation.selectedFeatures.includes(feature), "toggle-feature"))
-                .join("")}</div>`
-            : renderEmptyState("Load a dataset to choose predictors.")
-        }
+        ${renderMetricGrid([
+          {
+            label: "Rows prepared",
+            value: formatInteger(preparation?.rows.length ?? 0),
+            copy: "Observations carried through the current sample split.",
+          },
+          {
+            label: "Missing policy",
+            value: missingPolicy,
+            copy: "The transformation rule applied before grouped buckets are assigned.",
+          },
+        ])}
+      </div>
+      <div class="panel-subgrid two-up">
+        <section class="table-card">
+          <div class="mini-heading">
+            <p class="card-kicker">Sample split</p>
+            <h3>Assigned sub-populations</h3>
+          </div>
+          ${
+            preparation?.splitSummary?.length
+              ? renderTable(
+                  ["Sample", "Rows", "Default rate"],
+                  preparation.splitSummary.map((item) => ({
+                    Sample: item.sampleLabel,
+                    Rows: formatInteger(item.count),
+                    "Default rate": item.defaultRate === null ? "n/a" : formatPercent(item.defaultRate),
+                  }))
+                )
+              : renderEmptyState("Map a target column to populate the sample split.")
+          }
+        </section>
+        <section class="table-card">
+          <div class="mini-heading">
+            <p class="card-kicker">Data quality</p>
+            <h3>Highest missingness</h3>
+          </div>
+          ${
+            preparation?.missingSummary?.length
+              ? renderTable(
+                  ["Column", "Type", "Missing rate"],
+                  preparation.missingSummary.map((item) => ({
+                    Column: item.name,
+                    Type: item.type,
+                    "Missing rate": formatPercent(item.missingRate),
+                  }))
+                )
+              : renderEmptyState("Upload a dataset to review missingness.")
+          }
+        </section>
       </div>
     </article>
   `
@@ -773,7 +1349,7 @@ function renderPreparationControls() {
 
 function renderEstimationControls() {
   const config = state.steps.estimation
-  const features = state.steps.preparation.selectedFeatures
+  const features = state.steps.preparation.confirmedFeatures
 
   return `
     <article class="card panel-card">
@@ -796,8 +1372,62 @@ function renderEstimationControls() {
             ? `<div class="feature-list">${features
                 .map((feature) => renderFeatureOption(feature, state.steps.estimation.modelFeatures.includes(feature), "toggle-model-feature"))
                 .join("")}</div>`
-            : renderEmptyState("Choose variables in Data preparation first.")
+            : renderEmptyState("Confirm variables in Data preparation first.")
         }
+      </div>
+    </article>
+  `
+}
+
+function renderScoringControls() {
+  const estimation = state.derived.estimation
+  const scoring = state.derived.scoring
+  if (!estimation?.ready) {
+    return renderResultEmpty("Estimate the model first to unlock the interactive scoring scenario.")
+  }
+
+  return `
+    <article class="card panel-card">
+      <div class="panel-section">
+        <p class="card-kicker">Scenario input</p>
+        <h3>Select one bucket per final feature</h3>
+        <p class="inline-note">Each dropdown is ordered by WOE within the corresponding feature so the analyst can review the strongest buckets first.</p>
+        <div class="field-grid compact-grid">
+          ${scoring.featureOptions
+            .map(
+              (feature) => `
+                <label class="field-card">
+                  <span class="field-label">${escapeHtml(feature.name)}</span>
+                  <select class="field-input" data-action="set-scoring-bucket" data-feature-name="${escapeHtml(feature.name)}">
+                    <option value="">Select bucket</option>
+                    ${feature.options
+                      .map(
+                        (option) => `
+                          <option value="${escapeHtml(option.bucket)}" ${scoring.selectedBuckets[feature.name] === option.bucket ? "selected" : ""}>
+                            ${escapeHtml(option.bucket)} | WOE ${formatDecimal(option.woe, 3)} | Score ${formatInteger(option.score)}
+                          </option>
+                        `
+                      )
+                      .join("")}
+                  </select>
+                </label>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+      <div class="panel-section">
+        <div class="callout-card">
+          <strong>${scoring.complete ? "Scenario complete" : "Scenario incomplete"}</strong>
+          <p>${
+            scoring.complete
+              ? "All final features have a selected bucket, so the simulator can compute the logit, PD, score, and final rating for the chosen case."
+              : `Select ${formatInteger(scoring.missingSelections)} more feature bucket${scoring.missingSelections === 1 ? "" : "s"} to calculate the final score and rating.`
+          }</p>
+        </div>
+        <div class="editor-toolbar">
+          <button class="ghost-button small-button" type="button" data-action="clear-scoring-scenario">Clear selections</button>
+        </div>
       </div>
     </article>
   `
@@ -986,72 +1616,190 @@ function renderBasel4Controls() {
 
 function renderPreparationResults() {
   const preparation = state.derived.preparation
-  if (!preparation?.ready) {
-    return renderResultEmpty(preparation?.message || "Load a dataset and map the target column.")
+  const features = getEligibleFeatures()
+  const hasPendingSelectionChanges = !areSameStringArrays(
+    state.steps.preparation.selectedFeatures,
+    state.steps.preparation.confirmedFeatures
+  )
+  if (!state.metadata) {
+    return renderResultEmpty("Load a dataset and map the target column.")
   }
 
   return `
     <article class="card panel-card">
-      ${renderMetricGrid([
-        {
-          label: "Selected variables",
-          value: formatInteger(preparation.selectedFeatures.length),
-          copy: "Predictors currently carried into the preparation workflow.",
-        },
-        {
-          label: "Top IV feature",
-          value: preparation.topIvFeatures[0] ? escapeHtml(preparation.topIvFeatures[0].name) : "n/a",
-          copy: preparation.topIvFeatures[0] ? `IV ${formatDecimal(preparation.topIvFeatures[0].iv, 3)}` : "No active features.",
-        },
-        {
-          label: "Missing policy",
-          value: state.steps.preparation.missingStrategy === "median_mode" ? "Median / mode" : "Missing bucket",
-          copy: "The transformation policy used before scoring.",
-        },
-        {
-          label: "Rows prepared",
-          value: formatInteger(preparation.rows.length),
-          copy: "Observations carried through the sample split.",
-        },
-      ])}
+      <div class="panel-section">
+        <p class="card-kicker">Human in the loop</p>
+        <h3>Selected variables</h3>
+        ${
+          features.length
+            ? `<div class="feature-list">${features
+                .map((feature) => renderFeatureOption(feature, state.steps.preparation.selectedFeatures.includes(feature), "toggle-feature"))
+                .join("")}</div>`
+            : renderEmptyState("Load a dataset to choose predictors.")
+        }
+        <div class="feature-confirm-bar">
+          <div class="feature-confirm-copy">
+            <strong>${formatInteger(state.steps.preparation.confirmedFeatures.length)} confirmed variables</strong>
+            <p>${
+              hasPendingSelectionChanges
+                ? "The selection changed. Confirm again to refresh WOE, IV, and grouped-bucket diagnostics."
+                : state.steps.preparation.confirmedFeatures.length
+                  ? "WOE, IV, and estimation-bucket charts are based on the confirmed variables below."
+                  : "Choose variables and confirm them before the simulator calculates WOE, IV, and grouped-bucket diagnostics."
+            }</p>
+          </div>
+          <button class="primary-button" type="button" data-action="confirm-preparation-features">
+            Confirm selected variables
+          </button>
+        </div>
+      </div>
+    </article>
+    ${
+      preparation?.selectedFeatureDiagnostics?.length
+        ? `<section class="preparation-diagnostics">
+            ${renderPreparationDiagnosticsOverview(preparation)}
+            ${preparation.selectedFeatureDiagnostics.map((feature) => renderPreparationFeatureCard(feature)).join("")}
+          </section>`
+        : renderResultEmpty(
+            preparation?.message || "Confirm selected variables in Human in the loop to calculate WOE, IV, and bucket distributions."
+          )
+    }
+  `
+}
+
+function renderPreparationDiagnosticsOverview(preparation) {
+  const rankedFeatures = preparation.selectedFeatureDiagnostics.slice().sort((left, right) => right.iv - left.iv)
+  const topFeature = rankedFeatures[0]
+  return `
+    <article class="card panel-card">
+      <div class="mini-heading">
+        <div>
+          <p class="card-kicker">Information value</p>
+          <h3>Selected variables ranked in decreasing order</h3>
+        </div>
+        <div class="feature-insight-meta">
+          ${renderFeatureInsightBadge("Confirmed", formatInteger(preparation.confirmedFeatures.length))}
+          ${renderFeatureInsightBadge("Top IV", topFeature ? formatDecimal(topFeature.iv, 3) : "n/a")}
+        </div>
+      </div>
+      <p class="helper-copy">
+        The chart includes only analyst-confirmed variables. Higher information values indicate stronger univariate separation between
+        good and bad observations.
+      </p>
+      ${renderFeatureStrengthBars(rankedFeatures)}
+    </article>
+  `
+}
+
+function renderPreparationFeatureCard(feature) {
+  return `
+    <article class="card panel-card feature-diagnostic-card">
+      <div class="mini-heading">
+        <div>
+          <p class="card-kicker">Selected variable</p>
+          <h3>${escapeHtml(feature.name)}</h3>
+        </div>
+        <div class="feature-insight-meta">
+          ${renderFeatureInsightBadge("IV", formatDecimal(feature.iv, 3))}
+          ${renderFeatureInsightBadge("Missing", formatPercent(feature.missingRate))}
+        </div>
+      </div>
+      <p class="helper-copy">
+        ${escapeHtml(
+          `${capitalize(feature.type)} feature with ${formatInteger(feature.estimationDistribution.reduce((sum, bucket) => sum + bucket.count, 0))} estimation rows across grouped buckets.`
+        )}
+      </p>
       <div class="panel-subgrid two-up">
         <section class="table-card">
           <div class="mini-heading">
-            <p class="card-kicker">Sample split</p>
-            <h3>Assigned sub-populations</h3>
+            <p class="card-kicker">Weight of evidence</p>
+            <h3>Grouped buckets</h3>
           </div>
-          ${renderTable(
-            ["Sample", "Rows", "Default rate"],
-            preparation.splitSummary.map((item) => ({
-              Sample: item.sampleLabel,
-              Rows: formatInteger(item.count),
-              "Default rate": item.defaultRate === null ? "n/a" : formatPercent(item.defaultRate),
-            }))
-          )}
+          ${renderPreparationWoeChart(feature.bucketStats)}
         </section>
         <section class="table-card">
           <div class="mini-heading">
-            <p class="card-kicker">Data quality</p>
-            <h3>Highest missingness</h3>
+            <p class="card-kicker">Estimation sample</p>
+            <h3>Bucket distribution</h3>
           </div>
-          ${renderTable(
-            ["Column", "Type", "Missing rate"],
-            preparation.missingSummary.map((item) => ({
-              Column: item.name,
-              Type: item.type,
-              "Missing rate": formatPercent(item.missingRate),
-            }))
-          )}
+          ${renderPreparationBucketDistributionChart(feature.estimationDistribution)}
         </section>
       </div>
-      <section class="table-card">
-        <div class="mini-heading">
-          <p class="card-kicker">Predictive power</p>
-          <h3>IV ladder</h3>
-        </div>
-        ${renderFeatureStrengthBars(preparation.topIvFeatures)}
-      </section>
     </article>
+  `
+}
+
+function renderFeatureInsightBadge(label, value) {
+  return `
+    <span class="feature-insight-badge">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(value)}</span>
+    </span>
+  `
+}
+
+function renderPreparationWoeChart(bucketStats) {
+  if (!bucketStats.length) {
+    return renderEmptyState("WOE buckets appear after the variable is prepared.")
+  }
+
+  const rankedBuckets = bucketStats.slice().sort((left, right) => right.woe - left.woe || left.bucket.localeCompare(right.bucket))
+  const maxAbsWoe = Math.max(...rankedBuckets.map((bucket) => Math.abs(bucket.woe)), 0.001)
+  return `
+    <div class="woe-list">
+      ${rankedBuckets
+        .map((bucket) => {
+          const width = clamp(Math.abs(bucket.woe) / maxAbsWoe, 0, 1) * 50
+          const fillClass = bucket.woe >= 0 ? "is-positive" : "is-negative"
+          const style =
+            bucket.woe >= 0 ? `left: 50%; width: ${width}%;` : `left: calc(50% - ${width}%); width: ${width}%;`
+
+          return `
+            <div class="woe-row">
+              <div class="woe-header">
+                <strong>${escapeHtml(bucket.bucket)}</strong>
+                <span>${formatDecimal(bucket.woe, 3)}</span>
+              </div>
+              <div class="woe-track">
+                <span class="woe-axis"></span>
+                <span class="woe-fill ${fillClass}" style="${style}"></span>
+              </div>
+            </div>
+          `
+        })
+        .join("")}
+    </div>
+  `
+}
+
+function renderPreparationBucketDistributionChart(distribution) {
+  if (!distribution.length) {
+    return renderEmptyState("Bucket distribution appears after the estimation sample is assigned.")
+  }
+
+  const rankedDistribution = distribution
+    .slice()
+    .sort((left, right) => right.woe - left.woe || right.share - left.share || left.bucket.localeCompare(right.bucket))
+  return `
+    <div class="bar-list">
+      ${rankedDistribution
+        .map((bucket) => `
+          <div class="bar-row">
+            <div class="bar-header">
+              <strong>${escapeHtml(bucket.bucket)}</strong>
+              <span>${formatPercent(bucket.share, 1)}</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width:${bucket.share * 100}%"></div>
+            </div>
+            <div class="bucket-distribution-meta">
+              <span>${formatInteger(bucket.count)} rows</span>
+              <span>WOE ${formatDecimal(bucket.woe, 3)}</span>
+            </div>
+          </div>
+        `)
+        .join("")}
+    </div>
   `
 }
 
@@ -1111,18 +1859,72 @@ function renderEstimationResults() {
       <section class="table-card">
         <div class="mini-heading">
           <p class="card-kicker">Scorecard</p>
-          <h3>Bucket-level contributions</h3>
+          <h3>Bucket-level contributions ordered by WOE</h3>
         </div>
-        ${renderTable(
-          ["Feature", "Bucket", "WOE", "Score"],
-          estimation.scorecardRows.slice(0, 20).map((row) => ({
-            Feature: row.feature,
-            Bucket: row.bucket,
-            WOE: formatDecimal(row.woe, 3),
-            Score: formatInteger(row.score),
-          }))
-        )}
+        ${renderScorecardTable(estimation.scorecardRows)}
       </section>
+    </article>
+  `
+}
+
+function renderScoringResults() {
+  const scoring = state.derived.scoring
+  if (!scoring?.ready) {
+    return renderResultEmpty(scoring?.message || "Scoring becomes available after the model has been estimated.")
+  }
+
+  const ratingDefinition = RATING_MASTER_SCALE.find((item) => item.rating === scoring.rating)
+  return `
+    <article class="card panel-card">
+      ${
+        scoring.complete
+          ? renderMetricGrid([
+              {
+                label: "Scenario score",
+                value: formatInteger(scoring.score),
+                copy: "Exact score implied by the selected feature buckets.",
+              },
+              {
+                label: "Scenario PD",
+                value: formatPercent(scoring.predictedPd),
+                copy: "Probability of default from the logistic scorecard.",
+              },
+              {
+                label: "Rating",
+                value: scoring.rating,
+                copy: ratingDefinition?.description || "Mapped from the PD master scale.",
+              },
+              {
+                label: "Logit",
+                value: formatDecimal(scoring.logit, 3),
+                copy: "Latent logistic score before transformation into PD and points.",
+              },
+            ])
+          : `<div class="callout-card">
+              <strong>Complete the feature scenario</strong>
+              <p>Select one bucket for each final feature to calculate the final score and rating. Until then, the scorecard remains available on the right for reference.</p>
+            </div>`
+      }
+      <div class="panel-subgrid two-up">
+        <section class="table-card">
+          <div class="mini-heading">
+            <p class="card-kicker">Scenario output</p>
+            <h3>Selected bucket contributions</h3>
+          </div>
+          ${
+            scoring.complete
+              ? renderScorecardTable(scoring.selectedRows)
+              : renderEmptyState("The selected bucket contributions appear once every final feature has a chosen bucket.")
+          }
+        </section>
+        <section class="table-card">
+          <div class="mini-heading">
+            <p class="card-kicker">Reference scorecard</p>
+            <h3>All feature buckets</h3>
+          </div>
+          ${renderScorecardTable(scoring.scorecardRows)}
+        </section>
+      </div>
     </article>
   `
 }
@@ -1539,6 +2341,29 @@ function renderTable(columns, rows) {
   `
 }
 
+function sortScorecardRows(rows) {
+  return rows
+    .slice()
+    .sort(
+      (left, right) =>
+        (left.featureOrder ?? Number.MAX_SAFE_INTEGER) - (right.featureOrder ?? Number.MAX_SAFE_INTEGER) ||
+        right.woe - left.woe ||
+        left.bucket.localeCompare(right.bucket)
+    )
+}
+
+function renderScorecardTable(rows) {
+  return renderTable(
+    ["Feature", "Bucket", "WOE", "Score"],
+    sortScorecardRows(rows).map((row) => ({
+      Feature: row.feature,
+      Bucket: row.bucket,
+      WOE: formatDecimal(row.woe, 3),
+      Score: formatInteger(row.score),
+    }))
+  )
+}
+
 function renderFeatureStrengthBars(featureMeta) {
   if (!featureMeta.length) {
     return renderEmptyState("No IV values are available yet.")
@@ -1716,6 +2541,31 @@ function renderEmptyState(message) {
   return `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`
 }
 
+function refreshDocuments(source = "ui") {
+  STEP_DEFINITIONS.forEach((stepDefinition) => {
+    refreshDocumentsForStep(stepDefinition.key, source)
+  })
+}
+
+function refreshDocumentsForStep(stepKey, source = "ui") {
+  const currentDocuments = state.documents[stepKey]
+  if (source === "editor" && currentDocuments) {
+    const currentCodeNotes = extractAnalystNotes(currentDocuments.code)
+    const currentMethodologyNotes = extractAnalystNotes(currentDocuments.methodology)
+    if (currentCodeNotes !== null) {
+      state.notes[stepKey].code = currentCodeNotes
+    }
+    if (currentMethodologyNotes !== null) {
+      state.notes[stepKey].methodology = currentMethodologyNotes
+    }
+  }
+
+  state.documents[stepKey] = {
+    code: buildCodeDocument(stepKey),
+    methodology: buildMethodologyDocument(stepKey),
+  }
+}
+
 function buildCodeDocument(stepKey) {
   const syncBlock = buildSyncBlock(stepKey, "code")
   const notesBlock = buildAnalystNotesBlock(stepKey, "code")
@@ -1747,9 +2597,9 @@ function buildSyncBlock(stepKey, documentType) {
   }
 
   return [
-    "<!-- CREDIT RISK WITH AI :: STATE JSON START",
-    json,
-    "CREDIT RISK WITH AI :: STATE JSON END -->",
+    "% CREDIT RISK WITH AI :: STATE JSON START",
+    ...json.split("\n").map((line) => `% ${line}`),
+    "% CREDIT RISK WITH AI :: STATE JSON END",
   ].join("\n")
 }
 
@@ -1765,16 +2615,16 @@ function buildAnalystNotesBlock(stepKey, documentType) {
   }
 
   return [
-    "## Analyst notes",
-    "CREDIT RISK WITH AI :: ANALYST NOTES START",
-    notes,
-    "CREDIT RISK WITH AI :: ANALYST NOTES END",
+    "% CREDIT RISK WITH AI :: ANALYST NOTES START",
+    ...notes.split("\n").map((line) => `% ${line}`),
+    "% CREDIT RISK WITH AI :: ANALYST NOTES END",
   ].join("\n")
 }
 
 function buildCodeBody(stepKey) {
   const preparation = state.derived.preparation
   const estimation = state.derived.estimation
+  const scoring = state.derived.scoring
   const validation = state.derived.validation
   const monitoring = state.derived.monitoring
   const calibration = state.derived.calibration
@@ -1782,7 +2632,19 @@ function buildCodeBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
-    case "preparation":
+    case "preparation": {
+      const datasetFile = quoteRString(state.datasetName || "portfolio.csv")
+      const targetColumn = quoteRString(state.global.targetColumn || "Default_Flag")
+      const dateColumn = state.global.dateColumn ? quoteRString(state.global.dateColumn) : "NULL"
+      const draftSelectedVariables = renderRCharacterVector(state.steps.preparation.selectedFeatures)
+      const confirmedVariables = renderRCharacterVector(state.steps.preparation.confirmedFeatures)
+      const missingPolicy = quoteRString(state.steps.preparation.missingStrategy)
+      const shareConfig = preparation?.shareConfig || {
+        estimation: 0.6,
+        validation: 0.2,
+        monitoring: 0.1,
+        calibration: 0.1,
+      }
       return [
         "###############################################################################",
         "# Credit risk with AI - Data Preparation",
@@ -1792,71 +2654,255 @@ function buildCodeBody(stepKey) {
         "library(dplyr)",
         "library(readr)",
         "library(tidyr)",
-        "library(caTools)",
+        "library(purrr)",
+        "library(ggplot2)",
+        "library(scales)",
         "",
-        `dataset <- read_csv("${state.datasetName || "portfolio.csv"}")`,
-        `target_column <- "${state.global.targetColumn || "Default_Flag"}"`,
-        `selected_variables <- c(${state.steps.preparation.selectedFeatures.map((feature) => `"${feature}"`).join(", ")})`,
-        `missing_strategy <- "${state.steps.preparation.missingStrategy}"`,
+        `dataset <- read_csv(${datasetFile}, show_col_types = FALSE)`,
+        `target_column <- ${targetColumn}`,
+        `date_column <- ${dateColumn}`,
+        `draft_selected_variables <- ${draftSelectedVariables}`,
+        `confirmed_variables <- ${confirmedVariables}`,
+        `missing_policy <- ${missingPolicy}`,
         `bin_count <- ${Math.round(state.steps.preparation.binCount)}`,
-        `sample_shares <- c(estimation = ${formatDecimal(preparation?.shareConfig?.estimation ?? 0.6, 3)}, validation = ${formatDecimal(
-          preparation?.shareConfig?.validation ?? 0.2,
+        `sample_shares <- c(estimation = ${formatDecimal(shareConfig.estimation, 3)}, validation = ${formatDecimal(
+          shareConfig.validation,
           3
-        )}, monitoring = ${formatDecimal(preparation?.shareConfig?.monitoring ?? 0.1, 3)}, calibration = ${formatDecimal(
-          preparation?.shareConfig?.calibration ?? 0.1,
-          3
-        )})`,
+        )}, monitoring = ${formatDecimal(shareConfig.monitoring, 3)}, calibration = ${formatDecimal(shareConfig.calibration, 3)})`,
         "",
-        "calculate_missing <- function(df) {",
-        "  colSums(is.na(df)) / nrow(df) * 100",
+        "# Analyst confirmation is required before WOE, IV, and grouped-bucket diagnostics are produced.",
+        "if (!target_column %in% names(dataset)) stop('The mapped target column is not available in the input data.')",
+        "",
+        "trim_text <- function(x) {",
+        "  output <- trimws(as.character(x))",
+        "  output[is.na(x)] <- NA_character_",
+        "  output",
         "}",
         "",
-        "calculate_woe <- function(data, feature, target) {",
-        "  grouped <- data %>%",
-        "    group_by(.data[[feature]]) %>%",
-        "    summarise(",
-        "      Good = sum(1 - .data[[target]], na.rm = TRUE),",
-        "      Bad = sum(.data[[target]], na.rm = TRUE),",
-        "      .groups = 'drop'",
-        "    ) %>%",
-        "    mutate(",
-        "      WOE = -log((Bad / sum(Bad) + 1e-5) / (Good / sum(Good) + 1e-5)),",
-        "      IV = (Good / sum(Good) - Bad / sum(Bad)) * WOE",
-        "    )",
-        "  grouped",
+        "parse_numeric <- function(x) {",
+        "  cleaned <- gsub('[^0-9,.-]', '', trim_text(x))",
+        "  cleaned <- gsub(',', '.', cleaned, fixed = TRUE)",
+        "  suppressWarnings(as.numeric(cleaned))",
         "}",
         "",
-        "missing_summary <- calculate_missing(dataset)",
-        "print(sort(missing_summary, decreasing = TRUE))",
+        "parse_dates <- function(x) {",
+        "  suppressWarnings(as.POSIXct(trim_text(x), tz = 'UTC'))",
+        "}",
         "",
-        "woe_iv_results <- lapply(selected_variables, function(variable_name) {",
-        "  transformed <- calculate_woe(dataset, variable_name, target_column)",
-        "  list(",
-        "    variable = variable_name,",
-        "    woe = transformed,",
-        "    iv = sum(transformed$IV, na.rm = TRUE)",
+        "looks_binary <- function(x) {",
+        "  values <- unique(tolower(trim_text(x)))",
+        "  values <- values[values != '' & !is.na(values)]",
+        "  length(values) > 0 && length(values) <= 2 && all(values %in% c('0', '1', 'yes', 'no', 'true', 'false', 'y', 'n', 'default', 'non-default'))",
+        "}",
+        "",
+        "mode_value <- function(x) {",
+        "  values <- trim_text(x)",
+        "  values <- values[values != '' & !is.na(values)]",
+        "  if (!length(values)) return('Missing')",
+        "  counts <- sort(table(values), decreasing = TRUE)",
+        "  names(counts)[1]",
+        "}",
+        "",
+        "infer_column_type <- function(x) {",
+        "  values <- trim_text(x)",
+        "  values <- values[values != '' & !is.na(values)]",
+        "  if (!length(values)) return('categorical')",
+        "  numeric_share <- mean(!is.na(parse_numeric(values)))",
+        "  date_share <- mean(!is.na(parse_dates(values)))",
+        "  if (looks_binary(values)) 'binary' else if (date_share > 0.7) 'date' else if (numeric_share > 0.8) 'numeric' else 'categorical'",
+        "}",
+        "",
+        "normalise_target <- function(x) {",
+        "  values <- tolower(trim_text(x))",
+        "  dplyr::case_when(",
+        "    values %in% c('1', 'yes', 'true', 'y', 'default', 'bad') ~ 1,",
+        "    values %in% c('0', 'no', 'false', 'n', 'non-default', 'good') ~ 0,",
+        "    TRUE ~ suppressWarnings(as.numeric(values))",
         "  )",
-        "})",
-        "",
-        "for (variable_name in selected_variables) {",
-        "  woe_data <- calculate_woe(dataset, variable_name, target_column)",
-        "  dataset <- dataset %>%",
-        "    left_join(woe_data %>% select(!!sym(variable_name), WOE), by = variable_name) %>%",
-        "    mutate(!!paste0('WOE_', variable_name) := WOE) %>%",
-        "    select(-WOE)",
         "}",
         "",
-        "set.seed(123)",
-        "split_index <- sample.split(dataset[[target_column]], SplitRatio = sample_shares['estimation'])",
-        "estimation_sample <- dataset[split_index, ]",
-        "validation_sample <- dataset[!split_index, ]",
+        "build_numeric_breaks <- function(x, bins) {",
+        "  numeric_values <- parse_numeric(x)",
+        "  numeric_values <- numeric_values[is.finite(numeric_values)]",
+        "  if (length(numeric_values) <= 1) return(numeric(0))",
+        "  probs <- seq(0, 1, length.out = bins + 1)",
+        "  unique(as.numeric(stats::quantile(numeric_values, probs = probs, na.rm = TRUE, names = FALSE, type = 7)))",
+        "}",
         "",
-        "write_csv(dataset, 'processed_dataset.csv')",
-        "write_csv(estimation_sample, 'estimation_sample.csv')",
-        "write_csv(validation_sample, 'validation_sample.csv')",
+        "bucket_feature <- function(x, feature_type, breaks, missing_policy) {",
+        "  raw_text <- trim_text(x)",
+        "  missing_index <- is.na(x) | is.na(raw_text) | raw_text == ''",
+        "  if (feature_type == 'numeric') {",
+        "    numeric_x <- parse_numeric(x)",
+        "    median_value <- stats::median(numeric_x, na.rm = TRUE)",
+        "    if (!is.finite(median_value)) median_value <- 0",
+        "    if (missing_policy == 'median_mode') {",
+        "      numeric_x[missing_index | !is.finite(numeric_x)] <- median_value",
+        "      if (length(breaks) < 2) return(rep('All values', length(numeric_x)))",
+        "      return(as.character(cut(numeric_x, breaks = breaks, include.lowest = TRUE, right = FALSE, dig.lab = 10)))",
+        "    }",
+        "    bucket <- rep(NA_character_, length(numeric_x))",
+        "    observed <- !(missing_index | !is.finite(numeric_x))",
+        "    if (any(observed) && length(breaks) >= 2) {",
+        "      bucket[observed] <- as.character(cut(numeric_x[observed], breaks = breaks, include.lowest = TRUE, right = FALSE, dig.lab = 10))",
+        "    } else if (any(observed)) {",
+        "      bucket[observed] <- 'All values'",
+        "    }",
+        "    bucket[!observed] <- 'Missing'",
+        "    return(bucket)",
+        "  }",
+        "  bucket <- raw_text",
+        "  if (missing_policy == 'median_mode') {",
+        "    bucket[missing_index] <- mode_value(raw_text)",
+        "  } else {",
+        "    bucket[missing_index] <- 'Missing'",
+        "  }",
+        "  bucket",
+        "}",
         "",
-        `# Browser summary: ${preparation?.ready ? `${preparation.rows.length} rows prepared and ${preparation.featureMeta.length} transformed features created.` : "Preparation pending."}`,
+        "compute_woe_iv <- function(bucket, target) {",
+        "  epsilon <- 1e-5",
+        "  summary_tbl <- tibble(bucket = bucket, target = target) %>%",
+        "    filter(!is.na(target), !is.na(bucket), bucket != '') %>%",
+        "    count(bucket, target, name = 'n') %>%",
+        "    pivot_wider(names_from = target, values_from = n, values_fill = 0)",
+        "  if (!'0' %in% names(summary_tbl)) summary_tbl[['0']] <- 0",
+        "  if (!'1' %in% names(summary_tbl)) summary_tbl[['1']] <- 0",
+        "  summary_tbl %>%",
+        "    transmute(",
+        "      bucket = bucket,",
+        "      good = `0`,",
+        "      bad = `1`,",
+        "      good_share = (good + epsilon) / (sum(good) + epsilon),",
+        "      bad_share = (bad + epsilon) / (sum(bad) + epsilon),",
+        "      woe = -log(bad_share / good_share),",
+        "      iv_contribution = (good_share - bad_share) * woe,",
+        "      bad_rate = bad / pmax(good + bad, 1)",
+        "    )",
+        "}",
+        "",
+        "assign_samples <- function(data, date_column, shares) {",
+        "  ordering <- seq_len(nrow(data))",
+        "  if (!is.null(date_column) && nzchar(date_column) && date_column %in% names(data)) {",
+        "    parsed_dates <- parse_dates(data[[date_column]])",
+        "    ordering <- order(ifelse(is.na(parsed_dates), Inf, as.numeric(parsed_dates)), seq_len(nrow(data)))",
+        "  }",
+        "  counts <- floor(nrow(data) * shares[c('estimation', 'validation', 'monitoring')])",
+        "  counts <- as.integer(counts)",
+        "  samples <- rep('calibration', nrow(data))",
+        "  cursor <- 1L",
+        "  assign_block <- function(label, count, cursor) {",
+        "    if (count <= 0) return(cursor)",
+        "    idx <- ordering[seq.int(cursor, length.out = count)]",
+        "    samples[idx] <<- label",
+        "    cursor + count",
+        "  }",
+        "  cursor <- assign_block('estimation', counts[1], cursor)",
+        "  cursor <- assign_block('validation', counts[2], cursor)",
+        "  cursor <- assign_block('monitoring', counts[3], cursor)",
+        "  tibble(sample = samples)",
+        "}",
+        "",
+        "safe_stem <- function(x) {",
+        "  gsub('_+', '_', gsub('[^A-Za-z0-9]+', '_', tolower(x)))",
+        "}",
+        "",
+        "portfolio_prepared <- dataset %>%",
+        "  mutate(",
+        "    .row_id = row_number(),",
+        "    .target = normalise_target(.data[[target_column]])",
+        "  ) %>%",
+        "  bind_cols(assign_samples(., date_column, sample_shares))",
+        "",
+        "data_quality_summary <- tibble(",
+        "  column = names(dataset),",
+        "  type = map_chr(names(dataset), ~ infer_column_type(dataset[[.x]])),",
+        "  missing_rate = map_dbl(names(dataset), ~ mean(is.na(dataset[[.x]]) | trim_text(dataset[[.x]]) == ''))",
+        ") %>%",
+        "  arrange(desc(missing_rate))",
+        "",
+        "sample_split_summary <- portfolio_prepared %>%",
+        "  group_by(sample) %>%",
+        "  summarise(",
+        "    rows = n(),",
+        "    default_rate = mean(.target, na.rm = TRUE),",
+        "    .groups = 'drop'",
+        "  )",
+        "",
+        "feature_diagnostics <- list()",
+        "iv_ranking <- tibble(variable = character(), information_value = double())",
+        "",
+        "if (length(confirmed_variables) > 0) {",
+        "  feature_diagnostics <- map(confirmed_variables, function(feature_name) {",
+        "    feature_type <- infer_column_type(portfolio_prepared[[feature_name]])",
+        "    numeric_breaks <- if (feature_type == 'numeric') build_numeric_breaks(portfolio_prepared[[feature_name]], bin_count) else numeric(0)",
+        "    bucket <- bucket_feature(portfolio_prepared[[feature_name]], feature_type, numeric_breaks, missing_policy)",
+        "    woe_table <- compute_woe_iv(bucket, portfolio_prepared$.target)",
+        "    estimation_distribution <- tibble(bucket = bucket[portfolio_prepared$sample == 'estimation']) %>%",
+        "      filter(!is.na(bucket), bucket != '') %>%",
+        "      count(bucket, name = 'count') %>%",
+        "      mutate(share = count / sum(count)) %>%",
+        "      right_join(woe_table %>% select(bucket, woe), by = 'bucket') %>%",
+        "      mutate(",
+        "        count = replace_na(count, 0L),",
+        "        share = replace_na(share, 0)",
+        "      )",
+        "    list(",
+        "      variable = feature_name,",
+        "      feature_type = feature_type,",
+        "      information_value = sum(woe_table$iv_contribution, na.rm = TRUE),",
+        "      woe_table = woe_table,",
+        "      estimation_distribution = estimation_distribution",
+        "    )",
+        "  })",
+        "",
+        "  iv_ranking <- map_dfr(feature_diagnostics, function(item) {",
+        "    tibble(variable = item$variable, information_value = item$information_value)",
+        "  }) %>%",
+        "    arrange(desc(information_value))",
+        "}",
+        "",
+        "iv_chart <- NULL",
+        "diagnostic_plots <- list()",
+        "",
+        "if (nrow(iv_ranking) > 0) {",
+        "  iv_chart <- ggplot(iv_ranking, aes(x = reorder(variable, information_value), y = information_value)) +",
+        "    geom_col(fill = '#1a35a8') +",
+        "    coord_flip() +",
+        "    scale_y_continuous(labels = number_format(accuracy = 0.001)) +",
+        "    labs(title = 'Information value ranking', x = NULL, y = 'Information value') +",
+        "    theme_minimal(base_size = 12)",
+        "",
+        "  diagnostic_plots <- map(feature_diagnostics, function(item) {",
+        "    list(",
+        "      woe = ggplot(item$woe_table, aes(x = reorder(bucket, woe), y = woe, fill = woe >= 0)) +",
+        "        geom_col(show.legend = FALSE) +",
+        "        coord_flip() +",
+        "        labs(title = paste('WOE by bucket -', item$variable), x = NULL, y = 'WOE') +",
+        "        scale_fill_manual(values = c('TRUE' = '#1a35a8', 'FALSE' = '#ff5a0a')) +",
+        "        theme_minimal(base_size = 12),",
+        "      distribution = ggplot(item$estimation_distribution, aes(x = reorder(bucket, share), y = share)) +",
+        "        geom_col(fill = '#ff5a0a') +",
+        "        coord_flip() +",
+        "        scale_y_continuous(labels = percent_format(accuracy = 0.1)) +",
+        "        labs(title = paste('Estimation sample distribution -', item$variable), x = NULL, y = 'Share of estimation sample') +",
+        "        theme_minimal(base_size = 12)",
+        "    )",
+        "  })",
+        "}",
+        "",
+        "write_csv(sample_split_summary, 'sample_split_summary.csv')",
+        "write_csv(data_quality_summary, 'data_quality_summary.csv')",
+        "if (nrow(iv_ranking) > 0) write_csv(iv_ranking, 'information_value_ranking.csv')",
+        "walk(feature_diagnostics, function(item) {",
+        "  write_csv(item$woe_table, paste0('woe_', safe_stem(item$variable), '.csv'))",
+        "  write_csv(item$estimation_distribution, paste0('estimation_distribution_', safe_stem(item$variable), '.csv'))",
+        "})",
+        "if (!is.null(iv_chart)) ggsave('information_value_ranking.png', iv_chart, width = 8, height = 5, dpi = 160)",
+        "",
+        `# Browser summary: ${preparation?.ready ? `${preparation.rows.length} rows prepared, ${state.steps.preparation.confirmedFeatures.length} confirmed variables, and live WOE / IV diagnostics for the Data Preparation tab.` : "Load data, map the target, confirm variables, and rerun the script."}`,
       ].join("\n")
+    }
     case "estimation":
       return [
         "###############################################################################",
@@ -1912,6 +2958,89 @@ function buildCodeBody(stepKey) {
         "",
         `# Browser summary: ${estimation?.ready ? `AUC ${formatDecimal(estimation.estimationMetrics.auc, 3)} with ${estimation.finalFeatures.length} active features.` : "Estimation pending."}`,
       ].join("\n")
+    case "scoring": {
+      const scoringRows = sortScorecardRows(scoring?.scorecardRows || [])
+      const selectedBucketPairs =
+        scoring?.featureOptions?.length
+          ? scoring.featureOptions.map((feature) => `${quoteRString(feature.name)} = ${quoteRString(scoring.selectedBuckets?.[feature.name] || "")}`).join(", ")
+          : ""
+      const scorecardValues = scoringRows.length
+        ? scoringRows
+            .map(
+              (row) =>
+                `  ${quoteRString(row.feature)}, ${quoteRString(row.bucket)}, ${formatDecimal(row.woe, 6)}, ${formatDecimal(row.score, 0)}`
+            )
+            .join(",\n")
+        : `  ${quoteRString("Feature")}, ${quoteRString("Bucket")}, 0, 0`
+      const coefficientValues =
+        estimation?.finalFeatures?.length
+          ? estimation.finalFeatures
+              .map(
+                (feature, featureIndex) => `  ${quoteRString(feature.name)} = ${formatDecimal(estimation.model.beta[featureIndex + 1], 6)}`
+              )
+              .join(",\n")
+          : `  ${quoteRString("feature")} = 0`
+      return [
+        "###############################################################################",
+        "# Credit risk with AI - Scoring",
+        "###############################################################################",
+        "rm(list = ls())",
+        "",
+        "library(dplyr)",
+        "library(tibble)",
+        "",
+        `selected_buckets <- list(${selectedBucketPairs})`,
+        `score_offset <- ${formatDecimal(state.steps.estimation.scoreOffset, 3)}`,
+        `score_factor <- ${formatDecimal(state.steps.estimation.scoreFactor, 3)}`,
+        `intercept <- ${formatDecimal(estimation?.model?.beta?.[0] ?? 0, 6)}`,
+        "",
+        "scorecard <- tibble::tribble(",
+        "  ~Feature, ~Bucket, ~WOE, ~Score,",
+        scorecardValues,
+        ")",
+        "",
+        "coefficients <- c(",
+        coefficientValues,
+        ")",
+        "",
+        "lookup_bucket <- function(feature_name, bucket_name) {",
+        "  scorecard %>% filter(Feature == feature_name, Bucket == bucket_name) %>% slice(1)",
+        "}",
+        "",
+        "selected_rows <- bind_rows(lapply(names(selected_buckets), function(feature_name) {",
+        "  bucket_name <- selected_buckets[[feature_name]]",
+        "  if (!nzchar(bucket_name)) return(NULL)",
+        "  lookup_bucket(feature_name, bucket_name)",
+        "}))",
+        "",
+        "selected_rows <- selected_rows %>%",
+        "  mutate(coefficient = coefficients[Feature])",
+        "",
+        "scenario_logit <- intercept + sum(selected_rows$WOE * selected_rows$coefficient, na.rm = TRUE)",
+        "scenario_pd <- 1 / (1 + exp(-scenario_logit))",
+        "scenario_score <- round(score_offset + score_factor * scenario_logit)",
+        "",
+        "assign_rating <- function(pd) {",
+        "  dplyr::case_when(",
+        "    pd <= 0.004 ~ 'AAA',",
+        "    pd <= 0.008 ~ 'AA',",
+        "    pd <= 0.016 ~ 'A',",
+        "    pd <= 0.032 ~ 'BBB',",
+        "    pd <= 0.064 ~ 'BB',",
+        "    pd <= 0.128 ~ 'B',",
+        "    pd <= 0.256 ~ 'CCC',",
+        "    pd <= 0.512 ~ 'CC',",
+        "    TRUE ~ 'C'",
+        "  )",
+        "}",
+        "",
+        "scenario_rating <- assign_rating(scenario_pd)",
+        "print(selected_rows %>% arrange(Feature, desc(WOE)))",
+        "print(tibble(score = scenario_score, pd = scenario_pd, rating = scenario_rating))",
+        "",
+        `# Browser summary: ${scoring?.ready ? `Scoring tab ready with ${scoring.featureOptions.length} selectable model features.` : "Estimate the model before scoring a single case."}`,
+      ].join("\n")
+    }
     case "validation":
       return [
         "###############################################################################",
@@ -2119,6 +3248,7 @@ function buildCodeBody(stepKey) {
 function buildMethodologyBody(stepKey) {
   const preparation = state.derived.preparation
   const estimation = state.derived.estimation
+  const scoring = state.derived.scoring
   const validation = state.derived.validation
   const monitoring = state.derived.monitoring
   const calibration = state.derived.calibration
@@ -2126,192 +3256,234 @@ function buildMethodologyBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
-    case "preparation":
+    case "preparation": {
+      const configuredShares = escapeLatex(
+        [
+          `estimation ${formatPercent(preparation?.shareConfig?.estimation ?? 0.6, 1)}`,
+          `validation ${formatPercent(preparation?.shareConfig?.validation ?? 0.2, 1)}`,
+          `monitoring ${formatPercent(preparation?.shareConfig?.monitoring ?? 0.1, 1)}`,
+          `calibration ${formatPercent(preparation?.shareConfig?.calibration ?? 0.1, 1)}`,
+        ].join(", ")
+      )
+      const realizedSplit = escapeLatex(
+        preparation?.splitSummary?.length
+          ? preparation.splitSummary
+              .map((item) => `${item.sampleLabel}: ${formatInteger(item.count)} rows${item.defaultRate === null ? "" : ` at ${formatPercent(item.defaultRate)} default rate`}`)
+              .join("; ")
+          : "No sample allocation is available yet."
+      )
+      const ivRanking = escapeLatex(
+        preparation?.selectedFeatureDiagnostics?.length
+          ? preparation.selectedFeatureDiagnostics
+              .slice()
+              .sort((left, right) => right.iv - left.iv)
+              .map((feature) => `${feature.name} (${formatDecimal(feature.iv, 3)})`)
+              .join("; ")
+          : "Information values will appear after variables are confirmed."
+      )
       return [
-        "# Methodology for Data Preparation",
-        "",
-        "## Objective",
-        "Prepare the uploaded portfolio for rating model development through data profiling, missing-value treatment, variable transformation, and a controlled split into development, validation, monitoring, and calibration samples.",
-        "",
-        "## Current simulator configuration",
-        `- Dataset: ${state.datasetName || "No dataset loaded"}`,
-        `- Target variable: ${state.global.targetColumn || "Not mapped"}`,
-        `- Selected variables: ${state.steps.preparation.selectedFeatures.join(", ") || "None selected"}`,
-        `- Missing-value policy: ${state.steps.preparation.missingStrategy === "median_mode" ? "Median / mode imputation" : "Separate missing bucket"}`,
-        `- Binning depth: ${formatInteger(state.steps.preparation.binCount)}`,
-        `- Sample split: estimation ${formatPercent(preparation?.shareConfig?.estimation ?? 0.6, 1)}, validation ${formatPercent(
-          preparation?.shareConfig?.validation ?? 0.2,
-          1
-        )}, monitoring ${formatPercent(preparation?.shareConfig?.monitoring ?? 0.1, 1)}, calibration ${formatPercent(
-          preparation?.shareConfig?.calibration ?? 0.1,
-          1
-        )}`,
-        "",
-        "## Method",
-        "1. Inspect the uploaded data set, record missingness, and infer variable types.",
-        "2. Apply a consistent missing-value policy to categorical and numeric fields.",
-        "3. Transform selected variables into preparation buckets suitable for WOE / IV analysis.",
-        "4. Compute WOE and IV summaries so the user can keep only the strongest drivers.",
-        "5. Split the portfolio into estimation, validation, monitoring, and calibration samples to support the full model lifecycle.",
-        "",
-        "## Current reading",
-        `- Rows prepared: ${preparation?.ready ? formatInteger(preparation.rows.length) : "n/a"}`,
-        `- Highest IV variable: ${preparation?.topIvFeatures?.[0] ? `${preparation.topIvFeatures[0].name} (${formatDecimal(preparation.topIvFeatures[0].iv, 3)})` : "n/a"}`,
-        `- Most incomplete variable: ${preparation?.missingSummary?.[0] ? `${preparation.missingSummary[0].name} (${formatPercent(preparation.missingSummary[0].missingRate)})` : "n/a"}`,
+        "\\section{Data Preparation}",
+        "\\subsection{Objective}",
+        "This section formalizes the data preparation stage as an analyst-governed transformation of the uploaded portfolio into a modelling-ready analytical base table. The workflow combines structural quality review, deterministic sample construction, grouped bucket creation, and weight-of-evidence diagnostics before model estimation is permitted.",
+        "\\subsection{Configuration}",
+        ...latexItemizeLines([
+          `Dataset: \\texttt{${escapeLatex(state.datasetName || "No dataset loaded")}}.`,
+          `Target variable: \\texttt{${escapeLatex(state.global.targetColumn || "Not mapped")}}.`,
+          `Date variable: \\texttt{${escapeLatex(state.global.dateColumn || "Not mapped")}}.`,
+          `Confirmed variables: \\texttt{${escapeLatex(state.steps.preparation.confirmedFeatures.join(", ") || "None confirmed")}}.`,
+        ]),
+        "For each variable $j$, the missingness ratio shown in the data quality card is",
+        "\\begin{equation}",
+        "m_j = \\frac{1}{N} \\sum_{i=1}^{N} \\mathbb{I}\\{x_{ij} \\text{ is missing}\\}.",
+        "\\end{equation}",
+        "Requested sample shares are normalized before assignment:",
+        "\\begin{equation}",
+        "s_k = \\frac{s_k^{\\ast}}{\\sum_{\\ell \\in \\{E,V,M,C\\}} s_{\\ell}^{\\ast}}.",
+        "\\end{equation}",
+        "For each confirmed feature $j$ and bucket $b$, Weight of Evidence is computed as",
+        "\\begin{equation}",
+        "\\operatorname{WOE}_{jb} = -\\log\\left(\\frac{\\operatorname{BadShare}_{jb} + \\varepsilon}{\\operatorname{GoodShare}_{jb} + \\varepsilon}\\right), \\qquad \\varepsilon = 10^{-5}.",
+        "\\end{equation}",
+        "The Information Value contribution and total Information Value are",
+        "\\begin{align}",
+        "\\operatorname{IV}_{jb} &= \\left(\\operatorname{GoodShare}_{jb} - \\operatorname{BadShare}_{jb}\\right) \\operatorname{WOE}_{jb}, \\\\",
+        "\\operatorname{IV}_{j} &= \\sum_{b \\in \\mathcal{B}_j} \\operatorname{IV}_{jb}.",
+        "\\end{align}",
+        "The estimation-sample bucket distribution card reports",
+        "\\begin{equation}",
+        "p_{jb}^{(E)} = \\frac{n_{jb}^{(E)}}{\\sum_{c \\in \\mathcal{B}_j} n_{jc}^{(E)}}.",
+        "\\end{equation}",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Rows prepared: ${escapeLatex(preparation?.ready ? formatInteger(preparation.rows.length) : "n/a")}.`,
+          `Configured sample shares: ${configuredShares}.`,
+          `Realized sample allocation: ${realizedSplit}.`,
+          `Information value ranking: ${ivRanking}.`,
+        ]),
       ].join("\n")
+    }
     case "estimation":
       return [
-        "# Methodology for Estimation of Rating Models",
-        "",
-        "## Objective",
-        "Estimate a logistic rating model on the prepared sample, retain the strongest variables, and translate the fitted relationship into PDs, scores, and rating grades.",
-        "",
-        "## Current simulator configuration",
-        `- IV threshold: ${formatDecimal(state.steps.estimation.ivThreshold, 3)}`,
-        `- Maximum model features: ${formatInteger(state.steps.estimation.maxFeatures)}`,
-        `- Ridge penalty: ${formatDecimal(state.steps.estimation.ridge, 3)}`,
-        `- Score scaling: offset ${formatDecimal(state.steps.estimation.scoreOffset, 0)} and factor ${formatDecimal(state.steps.estimation.scoreFactor, 0)}`,
-        `- Feature shortlist: ${state.steps.estimation.modelFeatures.join(", ") || "None selected"}`,
-        "",
-        "## Method",
-        "1. Start from the prepared WOE-style feature set produced in Data preparation.",
-        "2. Keep variables that survive the IV threshold and the user-selected feature limit.",
-        "3. Estimate a logistic regression for the default flag.",
-        "4. Convert logits into PDs, scores, and final rating grades using the master scale.",
-        "5. Produce a scorecard table so the logic can be ported into R and model documentation.",
-        "",
-        "## Current reading",
-        `- Active model features: ${estimation?.ready ? estimation.finalFeatures.map((feature) => feature.name).join(", ") : "n/a"}`,
-        `- Estimation AUC: ${estimation?.ready ? formatDecimal(estimation.estimationMetrics.auc, 3) : "n/a"}`,
-        `- Estimation AR: ${estimation?.ready ? formatPercent(estimation.estimationMetrics.ar, 1) : "n/a"}`,
-        `- Average PD: ${estimation?.ready ? formatPercent(estimation.averagePd) : "n/a"}`,
+        "\\section{Estimation of Rating Model}",
+        "\\subsection{Objective}",
+        "The estimation stage fits a penalized logistic scorecard on the estimation sample using the WOE representation of the analyst-confirmed features that survive the IV threshold.",
+        "For observation $i$, the latent score is",
+        "\\begin{equation}",
+        "\\eta_i = \\beta_0 + \\sum_{j=1}^{p} \\beta_j w_{ij}.",
+        "\\end{equation}",
+        "The model-implied probability of default is",
+        "\\begin{equation}",
+        "\\operatorname{PD}_i = \\frac{1}{1 + e^{-\\eta_i}},",
+        "\\end{equation}",
+        "while the operational score is",
+        "\\begin{equation}",
+        "\\operatorname{Score}_i = \\operatorname{Offset} + \\operatorname{Factor} \\cdot \\eta_i.",
+        "\\end{equation}",
+        "The bucket-level scorecard table distributes the intercept across features and evaluates",
+        "\\begin{equation}",
+        "s_{jb} = \\left\\lfloor \\left(\\beta_j \\operatorname{WOE}_{jb} + \\frac{\\beta_0}{p}\\right) \\operatorname{Factor} + \\frac{\\operatorname{Offset}}{p} \\right\\rfloor.",
+        "\\end{equation}",
+        "Discrimination is summarized through",
+        "\\begin{equation}",
+        "\\operatorname{AR} = 2\\operatorname{AUC} - 1.",
+        "\\end{equation}",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Active model features: \\texttt{${escapeLatex(estimation?.ready ? estimation.finalFeatures.map((feature) => feature.name).join(", ") : "n/a")}}.`,
+          `Estimation AUC: ${escapeLatex(estimation?.ready ? formatDecimal(estimation.estimationMetrics.auc, 3) : "n/a")}.`,
+          `Estimation AR: ${escapeLatex(estimation?.ready ? formatPercent(estimation.estimationMetrics.ar, 1) : "n/a")}.`,
+          `Average PD: ${escapeLatex(estimation?.ready ? formatPercent(estimation.averagePd) : "n/a")}.`,
+        ]),
+      ].join("\n")
+    case "scoring":
+      return [
+        "\\section{Scoring}",
+        "\\subsection{Objective}",
+        "The scoring tab applies the estimated scorecard to a single analyst-defined scenario. One bucket is selected for each final feature and the scenario is evaluated with the fitted logistic model.",
+        "\\begin{equation}",
+        "\\eta^{\\star} = \\beta_0 + \\sum_{j=1}^{p} \\beta_j \\operatorname{WOE}_{j b_j^{\\star}}.",
+        "\\end{equation}",
+        "\\begin{align}",
+        "\\operatorname{PD}^{\\star} &= \\frac{1}{1 + e^{-\\eta^{\\star}}}, \\\\",
+        "\\operatorname{Score}^{\\star} &= \\operatorname{Offset} + \\operatorname{Factor} \\cdot \\eta^{\\star}.",
+        "\\end{align}",
+        "The final rating is obtained by mapping $\\operatorname{PD}^{\\star}$ into the master scale used in the estimation stage. All displayed scorecard rows are ordered by WOE within feature to facilitate scenario interpretation.",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Selectable model features: ${escapeLatex(formatInteger(scoring?.featureOptions?.length || 0))}.`,
+          `Scenario completeness: ${escapeLatex(scoring?.complete ? "Complete" : "Incomplete")}.`,
+          `Scenario score: ${escapeLatex(scoring?.complete ? formatInteger(scoring.score) : "n/a")}.`,
+          `Scenario PD: ${escapeLatex(scoring?.complete ? formatPercent(scoring.predictedPd) : "n/a")}.`,
+          `Scenario rating: ${escapeLatex(scoring?.complete ? scoring.rating : "n/a")}.`,
+        ]),
       ].join("\n")
     case "validation":
       return [
-        "# Methodology for Validation of Rating Models",
-        "",
-        "## Objective",
-        "Assess whether the rating model retains its discriminatory power and rating stability outside the development sample.",
-        "",
-        "## Current simulator configuration",
-        `- Classification threshold: ${formatPercent(state.steps.validation.classificationThreshold)}`,
-        `- SSI smoothing: ${formatDecimal(state.steps.validation.ssiSmoothing, 6)}`,
-        "",
-        "## Method",
-        "1. Score the validation sample using the fitted logistic model.",
-        "2. Compute AUC and derive the Accuracy Ratio for both estimation and validation samples.",
-        "3. Map PDs to ratings and compare the resulting distributions.",
-        "4. Calculate the System Stability Index to quantify distribution drift.",
-        "5. Review the confusion matrix at the chosen threshold for an operational classification view.",
-        "",
-        "## Current reading",
-        `- Estimation AR: ${validation?.ready ? formatPercent(validation.estimationMetrics.ar, 1) : "n/a"}`,
-        `- Validation AR: ${validation?.ready ? formatPercent(validation.validationMetrics.ar, 1) : "n/a"}`,
-        `- SSI: ${validation?.ready ? formatDecimal(validation.ssi, 3) : "n/a"}`,
-        `- Validation verdict: ${validation?.ready ? deriveValidationVerdict(validation) : "n/a"}`,
+        "\\section{Validation of Rating Model}",
+        "\\subsection{Objective}",
+        "The validation stage challenges the model on an out-of-sample population and assesses both discrimination stability and rating-distribution drift.",
+        "\\begin{equation}",
+        "\\widehat{y}_i = \\mathbb{I}\\{\\operatorname{PD}_i \\geq \\tau\\},",
+        "\\end{equation}",
+        `where $\\tau = ${escapeLatex(formatPercent(state.steps.validation.classificationThreshold))}$ is the analyst-defined operating threshold.`,
+        "Distribution drift is measured by the System Stability Index",
+        "\\begin{equation}",
+        "\\operatorname{SSI} = \\sum_{k} (q_k - p_k) \\log\\left(\\frac{q_k + \\alpha}{p_k + \\alpha}\\right),",
+        "\\end{equation}",
+        `with smoothing parameter $\\alpha = ${escapeLatex(formatDecimal(state.steps.validation.ssiSmoothing, 6))}$.`,
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Estimation AR: ${escapeLatex(validation?.ready ? formatPercent(validation.estimationMetrics.ar, 1) : "n/a")}.`,
+          `Validation AR: ${escapeLatex(validation?.ready ? formatPercent(validation.validationMetrics.ar, 1) : "n/a")}.`,
+          `SSI: ${escapeLatex(validation?.ready ? formatDecimal(validation.ssi, 3) : "n/a")}.`,
+          `Validation verdict: ${escapeLatex(validation?.ready ? deriveValidationVerdict(validation) : "n/a")}.`,
+        ]),
       ].join("\n")
     case "monitoring":
       return [
-        "# Methodology for Monitoring Rating Models",
-        "",
-        "## Objective",
-        "Monitor the live population against the estimation sample to detect discrimination drift, distribution drift, and signs of PD misalignment.",
-        "",
-        "## Current simulator configuration",
-        `- Monitoring sample: ${capitalize(state.steps.monitoring.sampleSource)}`,
-        `- SSI alert level: ${formatDecimal(state.steps.monitoring.driftThreshold, 3)}`,
-        `- DR / PD alert factor: ${formatDecimal(state.steps.monitoring.defaultPdAlert, 2)}`,
-        "",
-        "## Method",
-        "1. Score the monitoring sample with the current model.",
-        "2. Compare discrimination metrics between estimation and monitoring populations.",
-        "3. Compare rating distributions and compute SSI.",
-        "4. Contrast observed default rates with average predicted PDs.",
-        "5. Summarize the evidence for stable performance, moderate drift, or escalation.",
-        "",
-        "## Current reading",
-        `- Monitoring AR: ${monitoring?.ready ? formatPercent(monitoring.monitoringMetrics.ar, 1) : "n/a"}`,
-        `- SSI: ${monitoring?.ready ? formatDecimal(monitoring.ssi, 3) : "n/a"}`,
-        `- DR / PD factor: ${monitoring?.ready ? formatDecimal(monitoring.drPdFactor, 2) : "n/a"}`,
-        `- Monitoring verdict: ${monitoring?.ready ? deriveMonitoringVerdict(monitoring) : "n/a"}`,
+        "\\section{Monitoring of Rating Model}",
+        "\\subsection{Objective}",
+        "The monitoring stage operationalizes ongoing model surveillance and focuses on discrimination drift, rating drift, and observed default-rate misalignment.",
+        "\\begin{equation}",
+        "\\operatorname{DR/PD} = \\frac{\\overline{\\operatorname{DR}}}{\\overline{\\operatorname{PD}}}.",
+        "\\end{equation}",
+        "The SSI statistic from validation is reused to quantify rating distribution drift against the estimation benchmark.",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Monitoring sample: ${escapeLatex(capitalize(state.steps.monitoring.sampleSource))}.`,
+          `SSI alert level: ${escapeLatex(formatDecimal(state.steps.monitoring.driftThreshold, 3))}.`,
+          `DR/PD alert factor: ${escapeLatex(formatDecimal(state.steps.monitoring.defaultPdAlert, 2))}.`,
+          `Monitoring AR: ${escapeLatex(monitoring?.ready ? formatPercent(monitoring.monitoringMetrics.ar, 1) : "n/a")}.`,
+          `SSI: ${escapeLatex(monitoring?.ready ? formatDecimal(monitoring.ssi, 3) : "n/a")}.`,
+          `DR/PD factor: ${escapeLatex(monitoring?.ready ? formatDecimal(monitoring.drPdFactor, 2) : "n/a")}.`,
+        ]),
       ].join("\n")
     case "calibration":
       return [
-        "# Methodology for Calibrating a Rating Model",
-        "",
-        "## Objective",
-        "Recalibrate the score-to-PD mapping so that the average modeled PD aligns with the selected portfolio anchor point while keeping the ranking logic intact.",
-        "",
-        "## Current simulator configuration",
-        `- Calibration sample: ${capitalize(state.steps.calibration.sampleSource)}`,
-        `- Anchor source: ${state.steps.calibration.anchorSource === "manual" ? "Manual target" : "Observed default rate"}`,
-        `- Manual anchor rate: ${formatPercent(state.steps.calibration.manualAnchorRate)}`,
-        "",
-        "## Method",
-        "1. Score the chosen calibration sample with the current model.",
-        "2. Measure the portfolio anchor point using the observed default rate or a manual policy target.",
-        "3. Compute a logit shift equal to the difference between the target anchor and the average predicted PD.",
-        "4. Apply the shift to every PD and remap ratings based on the recalibrated curve.",
-        "5. Review the migration matrix and calibration curve before operational release.",
-        "",
-        "## Current reading",
-        `- Observed anchor: ${calibration?.ready ? formatPercent(calibration.observedAnchor) : "n/a"}`,
-        `- Target anchor: ${calibration?.ready ? formatPercent(calibration.anchorRate) : "n/a"}`,
-        `- Average PD before: ${calibration?.ready ? formatPercent(calibration.averagePredictedPd) : "n/a"}`,
-        `- Average PD after: ${calibration?.ready ? formatPercent(calibration.averageCalibratedPd) : "n/a"}`,
+        "\\section{Calibration of Rating Model}",
+        "\\subsection{Objective}",
+        "The calibration stage preserves the ranking order of the estimated model while shifting the average PD level toward a selected anchor point.",
+        "\\begin{equation}",
+        "\\Delta = \\operatorname{logit}(a) - \\operatorname{logit}(\\bar{p}),",
+        "\\end{equation}",
+        "where $a$ denotes the target anchor and $\\bar{p}$ denotes the mean predicted PD on the selected calibration population.",
+        "\\begin{equation}",
+        "\\operatorname{PD}^{\\mathrm{cal}}_i = \\sigma\\left(\\operatorname{logit}(\\operatorname{PD}_i) + \\Delta\\right).",
+        "\\end{equation}",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Observed anchor: ${escapeLatex(calibration?.ready ? formatPercent(calibration.observedAnchor) : "n/a")}.`,
+          `Target anchor: ${escapeLatex(calibration?.ready ? formatPercent(calibration.anchorRate) : "n/a")}.`,
+          `Average PD before: ${escapeLatex(calibration?.ready ? formatPercent(calibration.averagePredictedPd) : "n/a")}.`,
+          `Average PD after: ${escapeLatex(calibration?.ready ? formatPercent(calibration.averageCalibratedPd) : "n/a")}.`,
+        ]),
       ].join("\n")
     case "basel3":
       return [
-        "# Methodology for Basel III Risk-Weighted Assets",
-        "",
-        "## Objective",
-        "Translate the scored portfolio into a Basel III mortgage-style IRB capital view using PD, LGD, maturity, and EAD assumptions controlled by the user.",
-        "",
-        "## Current simulator configuration",
-        `- Portfolio sample: ${capitalize(state.steps.basel3.sampleSource)}`,
-        `- PD source: ${capitalize(state.steps.basel3.pdSource)}`,
-        `- Exposure source: ${state.steps.basel3.exposureMode === "column" ? "Mapped column" : "Fixed value"}`,
-        `- LGD source: ${state.steps.basel3.lgdMode === "column" ? "Mapped column" : "Fixed value"}`,
-        `- Maturity source: ${state.steps.basel3.maturityMode === "column" ? "Mapped column" : "Fixed value"}`,
-        "",
-        "## Method",
-        "1. Start from predicted or calibrated PDs, depending on the selected governance view.",
-        "2. Resolve exposure, LGD, and maturity from mapped columns or constant assumptions.",
-        "3. Apply the Basel III mortgage IRB function to compute capital requirement K and resulting RWA.",
-        "4. Aggregate RWAs across the portfolio and inspect the implied average risk weight.",
-        "",
-        "## Current reading",
-        `- Total exposure: ${basel3?.ready ? formatCurrencyCompact(basel3.totalExposure) : "n/a"}`,
-        `- Total RWA: ${basel3?.ready ? formatCurrencyCompact(basel3.totalRwa) : "n/a"}`,
-        `- Average risk weight: ${basel3?.ready ? formatPercent(basel3.averageRiskWeight) : "n/a"}`,
+        "\\section{Basel III Risk-Weighted Assets}",
+        "\\subsection{Objective}",
+        "The Basel III view translates model outputs into an IRB-style mortgage capital measure under analyst-selected parameter assumptions.",
+        "\\begin{align}",
+        "\\rho(PD) &= 0.12 \\frac{1 - e^{-50PD}}{1 - e^{-50}} + 0.24 \\left(1 - \\frac{1 - e^{-50PD}}{1 - e^{-50}}\\right), \\\\",
+        "b(PD) &= \\left(0.11852 - 0.05478 \\log(PD)\\right)^2.",
+        "\\end{align}",
+        "\\begin{equation}",
+        "K = \\left[LGD \\cdot \\Phi\\left(\\frac{\\Phi^{-1}(PD)}{\\sqrt{1-\\rho}} + \\sqrt{\\frac{\\rho}{1-\\rho}}\\,\\Phi^{-1}(0.999)\\right) - PD \\cdot LGD\\right] \\frac{1 + (M-2.5)b}{1 - 1.5b}.",
+        "\\end{equation}",
+        "\\begin{equation}",
+        "\\operatorname{RWA} = 12.5 \\times K \\times EAD.",
+        "\\end{equation}",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Total exposure: ${escapeLatex(basel3?.ready ? formatCurrencyCompact(basel3.totalExposure) : "n/a")}.`,
+          `Total RWA: ${escapeLatex(basel3?.ready ? formatCurrencyCompact(basel3.totalRwa) : "n/a")}.`,
+          `Average risk weight: ${escapeLatex(basel3?.ready ? formatPercent(basel3.averageRiskWeight) : "n/a")}.`,
+        ]),
       ].join("\n")
     case "basel4":
       return [
-        "# Methodology for Basel IV Risk-Weighted Assets",
-        "",
-        "## Objective",
-        "Extend the capital view with Basel IV floors, standardized RWAs, exposure-class logic, and the portfolio-level output floor.",
-        "",
-        "## Current simulator configuration",
-        `- Portfolio sample: ${capitalize(state.steps.basel4.sampleSource)}`,
-        `- PD floor: ${formatInteger(state.steps.basel4.pdFloorBps)} bps`,
-        `- Output floor: ${formatPercent(state.steps.basel4.outputFloor / 100, 1)}`,
-        `- Fallback exposure class: ${state.steps.basel4.defaultExposureClass}`,
-        "",
-        "## Method",
-        "1. Apply Basel IV floors to PD and LGD where relevant.",
-        "2. Map the portfolio into standardized exposure classes and LTV segments.",
-        "3. Compute standardized RWAs and compare them to the floored IRB view.",
-        "4. Apply the output floor at portfolio level and retain the more conservative total.",
-        "",
-        "## Current reading",
-        `- Standardized RWA: ${basel4?.ready ? formatCurrencyCompact(basel4.standardizedRwa) : "n/a"}`,
-        `- Floored IRB RWA: ${basel4?.ready ? formatCurrencyCompact(basel4.irbRwa) : "n/a"}`,
-        `- Final RWA: ${basel4?.ready ? formatCurrencyCompact(basel4.finalRwa) : "n/a"}`,
-        `- Output floor gap: ${basel4?.ready ? formatCurrencyCompact(basel4.floorGap) : "n/a"}`,
+        "\\section{Basel IV Risk-Weighted Assets}",
+        "\\subsection{Objective}",
+        "The Basel IV view augments the IRB calculation with regulatory parameter floors, standardized real-estate risk weights, and the output floor.",
+        "\\begin{equation}",
+        "PD_i^{\\mathrm{floor}} = \\max\\left(PD_i, PD_{\\min}\\right).",
+        "\\end{equation}",
+        "\\begin{equation}",
+        "\\operatorname{RWA}^{\\mathrm{STD}}_i = EAD_i \\times RW(\\text{ExposureClass}_i, LTV_i).",
+        "\\end{equation}",
+        "\\begin{equation}",
+        "\\operatorname{RWA}^{\\mathrm{Final}} = \\max\\left(\\operatorname{RWA}^{\\mathrm{IRB,floor}}, \\lambda \\operatorname{RWA}^{\\mathrm{STD}}\\right).",
+        "\\end{equation}",
+        "\\subsection{Current Analytical Reading}",
+        ...latexItemizeLines([
+          `Standardized RWA: ${escapeLatex(basel4?.ready ? formatCurrencyCompact(basel4.standardizedRwa) : "n/a")}.`,
+          `Floored IRB RWA: ${escapeLatex(basel4?.ready ? formatCurrencyCompact(basel4.irbRwa) : "n/a")}.`,
+          `Final RWA: ${escapeLatex(basel4?.ready ? formatCurrencyCompact(basel4.finalRwa) : "n/a")}.`,
+          `Output floor gap: ${escapeLatex(basel4?.ready ? formatCurrencyCompact(basel4.floorGap) : "n/a")}.`,
+        ]),
       ].join("\n")
     default:
-      return "# No methodology template available."
+      return "\\section{Methodology Placeholder}\nNo methodology template available."
   }
 }
 
@@ -2320,7 +3492,8 @@ function composeFullRScript() {
 }
 
 function composeFullMethodology() {
-  return STEP_DEFINITIONS.map((stepDefinition) => stripMethodologyArtifacts(state.documents[stepDefinition.key].methodology)).join("\n\n\n")
+  const body = STEP_DEFINITIONS.map((stepDefinition) => stripMethodologyArtifacts(state.documents[stepDefinition.key].methodology)).join("\n\n")
+  return buildStandaloneLatexDocument("Credit risk with AI - End-to-end methodology", body)
 }
 
 function parseSyncPayload(text) {
@@ -2336,7 +3509,7 @@ function parseSyncPayload(text) {
   const block = text
     .slice(startIndex + startMarker.length, endIndex)
     .split("\n")
-    .map((line) => line.replace(/^\s*#\s?/, "").replace(/^\s*<!--\s?/, "").replace(/\s*-->\s*$/, ""))
+    .map((line) => line.replace(/^\s*#\s?/, "").replace(/^\s*%\s?/, "").replace(/^\s*<!--\s?/, "").replace(/\s*-->\s*$/, ""))
     .join("\n")
     .trim()
 
@@ -2360,7 +3533,7 @@ function extractAnalystNotes(text) {
   return text
     .slice(startIndex + startMarker.length, endIndex)
     .split("\n")
-    .map((line) => line.replace(/^\s*#\s?/, ""))
+    .map((line) => line.replace(/^\s*#\s?/, "").replace(/^\s*%\s?/, ""))
     .join("\n")
     .trim()
 }
@@ -2393,6 +3566,9 @@ function mergeWithTemplate(currentValue, nextValue, templateValue) {
   }
 
   if (templateValue && typeof templateValue === "object") {
+    if (!Object.keys(templateValue).length) {
+      return nextValue && typeof nextValue === "object" && !Array.isArray(nextValue) ? clone(nextValue) : currentValue
+    }
     return Object.keys(templateValue).reduce((accumulator, key) => {
       accumulator[key] = mergeWithTemplate(currentValue[key], nextValue?.[key], templateValue[key])
       return accumulator
@@ -2411,11 +3587,17 @@ function computePreparation() {
       rows: [],
       splitSummary: [],
       selectedFeatures: [],
+      confirmedFeatures: [],
+      selectedFeatureDiagnostics: [],
+      missingSummary: [],
     }
   }
 
   const targetColumn = state.global.targetColumn
   const selectedFeatures = state.steps.preparation.selectedFeatures.filter((feature) =>
+    state.metadata.columns.includes(feature)
+  )
+  const confirmedFeatures = state.steps.preparation.confirmedFeatures.filter((feature) =>
     state.metadata.columns.includes(feature)
   )
 
@@ -2428,7 +3610,7 @@ function computePreparation() {
     __sample: sampleAssignments[index],
   }))
 
-  const featureMeta = selectedFeatures.map((featureName) => buildFeatureMeta(featureName, rows)).filter(Boolean)
+  const featureMeta = confirmedFeatures.map((featureName) => buildFeatureMeta(featureName, rows)).filter(Boolean)
   const featureMap = new Map(featureMeta.map((feature) => [feature.name, feature]))
 
   const preparedRows = rows.map((row) => {
@@ -2459,19 +3641,57 @@ function computePreparation() {
     .slice()
     .sort((left, right) => right.missingRate - left.missingRate)
     .slice(0, 8)
+  const selectedFeatureDiagnostics = buildPreparationFeatureDiagnostics(featureMeta, preparedRows)
 
   return {
     ready: featureMeta.length > 0,
-    message: featureMeta.length ? "" : "Select at least one predictor to prepare the dataset.",
+    message: featureMeta.length ? "" : "Select variables in Human in the loop and confirm them before calculating WOE, IV, and grouped buckets.",
     shareConfig,
     selectedFeatures,
+    confirmedFeatures,
     featureMeta,
     featureMap,
     rows: preparedRows,
     splitSummary,
     topIvFeatures,
     missingSummary,
+    selectedFeatureDiagnostics,
   }
+}
+
+function buildPreparationFeatureDiagnostics(featureMeta, preparedRows) {
+  const estimationRows = preparedRows.filter((row) => row.sample === "estimation")
+
+  return featureMeta.map((feature) => {
+    const orderedBucketStats = feature.bucketStats.slice().sort((left, right) => compareBucketLabels(left.bucket, right.bucket, feature.type === "numeric"))
+    const bucketCounts = new Map()
+
+    estimationRows.forEach((row) => {
+      const bucket = row.bins[feature.name]
+      if (!bucket) {
+        return
+      }
+      bucketCounts.set(bucket, (bucketCounts.get(bucket) || 0) + 1)
+    })
+
+    const totalRows = sum(Array.from(bucketCounts.values()))
+    const estimationDistribution = orderedBucketStats.map((bucket) => {
+      const count = bucketCounts.get(bucket.bucket) || 0
+      return {
+        bucket: bucket.bucket,
+        count,
+        share: totalRows ? count / totalRows : 0,
+        woe: bucket.woe,
+      }
+    })
+
+    return {
+      ...feature,
+      bucketStats: orderedBucketStats,
+      missingRate: state.metadata.columnMap[feature.name]?.missingRate ?? 0,
+      estimationDistribution,
+    }
+  })
 }
 
 function computeEstimation(preparation) {
@@ -2570,6 +3790,92 @@ function computeEstimation(preparation) {
     averageScore: mean(estimationPredictions.map((row) => row.score)),
     ratingDistribution: computeRatingDistribution(estimationPredictions, "rating"),
     rowsBySample: summarizeSamples(predictedRows),
+  }
+}
+
+function computeScoring(estimation) {
+  if (!estimation.ready) {
+    return {
+      ready: false,
+      message: estimation.message || "Estimate the model first.",
+      featureOptions: [],
+      selectedBuckets: {},
+      selectedRows: [],
+      scorecardRows: [],
+      complete: false,
+      missingSelections: 0,
+    }
+  }
+
+  const featureOptions = estimation.finalFeatures.map((feature) => ({
+    name: feature.name,
+    options: sortScorecardRows(estimation.scorecardRows.filter((row) => row.feature === feature.name)).map((row) => ({
+      bucket: row.bucket,
+      woe: row.woe,
+      score: row.score,
+      featureOrder: row.featureOrder,
+    })),
+  }))
+
+  const selectedBuckets = featureOptions.reduce((accumulator, feature) => {
+    const requestedBucket = state.steps.scoring.selectedBuckets?.[feature.name]
+    if (feature.options.some((option) => option.bucket === requestedBucket)) {
+      accumulator[feature.name] = requestedBucket
+    }
+    return accumulator
+  }, {})
+
+  state.steps.scoring.selectedBuckets = selectedBuckets
+
+  const selectedRows = featureOptions
+    .map((feature) => {
+      const selectedBucket = selectedBuckets[feature.name]
+      return feature.options.find((option) => option.bucket === selectedBucket)
+        ? {
+            feature: feature.name,
+            ...feature.options.find((option) => option.bucket === selectedBucket),
+          }
+        : null
+    })
+    .filter(Boolean)
+
+  const missingSelections = featureOptions.filter((feature) => !selectedBuckets[feature.name]).length
+  const complete = Boolean(featureOptions.length) && missingSelections === 0
+  if (!complete) {
+    return {
+      ready: true,
+      message: "",
+      featureOptions,
+      selectedBuckets,
+      selectedRows,
+      scorecardRows: estimation.scorecardRows,
+      complete: false,
+      missingSelections,
+    }
+  }
+
+  const logit =
+    estimation.model.beta[0] +
+    estimation.finalFeatures.reduce((sum, feature, featureIndex) => {
+      const selectedRow = selectedRows.find((row) => row.feature === feature.name)
+      return sum + (selectedRow?.woe ?? 0) * estimation.model.beta[featureIndex + 1]
+    }, 0)
+  const predictedPd = sigmoid(logit)
+  const score = Math.round(state.steps.estimation.scoreOffset + state.steps.estimation.scoreFactor * logit)
+
+  return {
+    ready: true,
+    message: "",
+    featureOptions,
+    selectedBuckets,
+    selectedRows,
+    scorecardRows: estimation.scorecardRows,
+    complete: true,
+    missingSelections: 0,
+    logit,
+    predictedPd,
+    score,
+    rating: assignRating(predictedPd),
   }
 }
 
@@ -2895,66 +4201,19 @@ function computeBasel4(estimation, calibration) {
 }
 
 function parseDelimitedText(text) {
-  const normalized = text.replace(/\uFEFF/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-  const delimiter = detectDelimiter(normalized)
-  const parsedRows = []
-  let currentField = ""
-  let currentRow = []
-  let inQuotes = false
+  const delimiter = detectDelimiter(text.replace(/\uFEFF/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
+  const parser = createDelimitedParser(delimiter)
+  consumeDelimitedChunk(parser, text)
+  finalizeDelimitedParser(parser)
 
-  for (let index = 0; index < normalized.length; index += 1) {
-    const character = normalized[index]
-    const nextCharacter = normalized[index + 1]
-
-    if (character === '"') {
-      if (inQuotes && nextCharacter === '"') {
-        currentField += '"'
-        index += 1
-      } else {
-        inQuotes = !inQuotes
-      }
-      continue
-    }
-
-    if (character === delimiter && !inQuotes) {
-      currentRow.push(currentField)
-      currentField = ""
-      continue
-    }
-
-    if (character === "\n" && !inQuotes) {
-      currentRow.push(currentField)
-      if (currentRow.some((field) => field.trim() !== "")) {
-        parsedRows.push(currentRow)
-      }
-      currentField = ""
-      currentRow = []
-      continue
-    }
-
-    currentField += character
-  }
-
-  if (currentField.length || currentRow.length) {
-    currentRow.push(currentField)
-    if (currentRow.some((field) => field.trim() !== "")) {
-      parsedRows.push(currentRow)
-    }
-  }
-
-  if (parsedRows.length < 2) {
+  if (!parser.columns.length || !parser.rowCount) {
     throw new Error("The file does not contain a header row plus data.")
   }
 
-  const columns = deduplicateHeaders(parsedRows[0].map((header, index) => normalizeHeader(header) || `Column_${index + 1}`))
-  const rows = parsedRows.slice(1).map((rawRow) =>
-    columns.reduce((accumulator, column, columnIndex) => {
-      accumulator[column] = (rawRow[columnIndex] ?? "").trim()
-      return accumulator
-    }, {})
-  )
-
-  return { columns, rows }
+  return {
+    columns: parser.columns,
+    rows: parser.rows,
+  }
 }
 
 function detectDelimiter(text) {
@@ -3132,6 +4391,48 @@ function buildFeatureMeta(featureName, rows) {
   }
 }
 
+function compareBucketLabels(leftBucket, rightBucket, isNumeric) {
+  if (leftBucket === rightBucket) {
+    return 0
+  }
+  if (leftBucket === "All values") {
+    return -1
+  }
+  if (rightBucket === "All values") {
+    return 1
+  }
+  if (leftBucket === "Missing") {
+    return 1
+  }
+  if (rightBucket === "Missing") {
+    return -1
+  }
+
+  if (isNumeric) {
+    const leftStart = extractBucketStart(leftBucket)
+    const rightStart = extractBucketStart(rightBucket)
+    if (leftStart !== null && rightStart !== null) {
+      return leftStart - rightStart
+    }
+  }
+
+  return leftBucket.localeCompare(rightBucket)
+}
+
+function extractBucketStart(bucketLabel) {
+  const closedRangeMatch = bucketLabel.match(/^\[\s*(-?\d+(?:\.\d+)?),/)
+  if (closedRangeMatch) {
+    return Number(closedRangeMatch[1])
+  }
+
+  const openRangeMatch = bucketLabel.match(/^>=\s*(-?\d+(?:\.\d+)?)/)
+  if (openRangeMatch) {
+    return Number(openRangeMatch[1])
+  }
+
+  return null
+}
+
 function transformValueForFeature(rawValue, isNumeric, quantileEdges, defaultBucket, medianValue, missingStrategy) {
   const normalizedValue = normalizeCell(rawValue)
   if (normalizedValue === "") {
@@ -3288,15 +4589,20 @@ function buildScorecardRows(finalFeatures, beta) {
 
   return finalFeatures.flatMap((feature, featureIndex) => {
     const coefficient = beta[featureIndex + 1]
-    return feature.bucketStats.map((bucket) => ({
-      feature: feature.name,
-      bucket: bucket.bucket,
-      woe: bucket.woe,
-      score: Math.floor(
-        (bucket.woe * coefficient + beta[0] / finalFeatures.length) * state.steps.estimation.scoreFactor +
-          state.steps.estimation.scoreOffset / finalFeatures.length
-      ),
-    }))
+    return feature.bucketStats
+      .slice()
+      .sort((left, right) => right.woe - left.woe || left.bucket.localeCompare(right.bucket))
+      .map((bucket, bucketIndex) => ({
+        feature: feature.name,
+        featureOrder: featureIndex,
+        bucketOrder: bucketIndex,
+        bucket: bucket.bucket,
+        woe: bucket.woe,
+        score: Math.floor(
+          (bucket.woe * coefficient + beta[0] / finalFeatures.length) * state.steps.estimation.scoreFactor +
+            state.steps.estimation.scoreOffset / finalFeatures.length
+        ),
+      }))
   })
 }
 
@@ -3752,6 +5058,8 @@ function openPrintWindow(title, content) {
 
 function stripMethodologyArtifacts(text) {
   return text
+    .replace(/% CREDIT RISK WITH AI :: STATE JSON START[\s\S]*?% CREDIT RISK WITH AI :: STATE JSON END/g, "")
+    .replace(/% CREDIT RISK WITH AI :: ANALYST NOTES START[\s\S]*?% CREDIT RISK WITH AI :: ANALYST NOTES END/g, "")
     .replace(/<!-- CREDIT RISK WITH AI :: STATE JSON START[\s\S]*?CREDIT RISK WITH AI :: STATE JSON END -->/g, "")
     .replace(/CREDIT RISK WITH AI :: ANALYST NOTES START/g, "")
     .replace(/CREDIT RISK WITH AI :: ANALYST NOTES END/g, "")
@@ -3762,7 +5070,10 @@ function coerceInputValue(element) {
   if (element.dataset.valueKind === "percent") {
     return clamp(Number(element.value) / 100, 0, 1)
   }
-  return Number(element.value)
+  if (element.dataset.valueKind === "number") {
+    return Number(element.value)
+  }
+  return element.value
 }
 
 function toggleArrayValue(array, value, checked) {
@@ -4048,6 +5359,19 @@ function formatInteger(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number(value) || 0)
 }
 
+function formatBytes(value) {
+  const numericValue = Number(value) || 0
+  if (numericValue <= 0) {
+    return "0 B"
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  const unitIndex = Math.min(Math.floor(Math.log(numericValue) / Math.log(1024)), units.length - 1)
+  const scaledValue = numericValue / 1024 ** unitIndex
+  const digits = scaledValue >= 100 || unitIndex === 0 ? 0 : scaledValue >= 10 ? 1 : 2
+  return `${scaledValue.toFixed(digits)} ${units[unitIndex]}`
+}
+
 function formatDecimal(value, digits = 2) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) {
     return "n/a"
@@ -4074,11 +5398,81 @@ function formatCurrencyCompact(value) {
   }).format(Number(value))
 }
 
+function quoteRString(value) {
+  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+}
+
+function renderRCharacterVector(values) {
+  return values.length ? `c(${values.map((value) => quoteRString(value)).join(", ")})` : "character(0)"
+}
+
+function escapeLatex(value) {
+  return String(value)
+    .replace(/\\/g, "\\textbackslash{}")
+    .replace(/([{}_$&#%])/g, "\\$1")
+    .replace(/\^/g, "\\textasciicircum{}")
+    .replace(/~/g, "\\textasciitilde{}")
+}
+
+function latexItemizeLines(items) {
+  return ["\\begin{itemize}", ...items.map((item) => `  \\item ${item}`), "\\end{itemize}"]
+}
+
+function buildStandaloneLatexDocument(title, body) {
+  return [
+    "\\documentclass[11pt]{article}",
+    "\\usepackage[margin=1in]{geometry}",
+    "\\usepackage[T1]{fontenc}",
+    "\\usepackage[utf8]{inputenc}",
+    "\\usepackage{lmodern}",
+    "\\usepackage{amsmath,amssymb}",
+    "\\usepackage{booktabs,longtable,array}",
+    "\\usepackage{enumitem}",
+    "\\usepackage{hyperref}",
+    "\\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue}",
+    `\\title{${escapeLatex(title)}}`,
+    "\\author{Credit risk with AI}",
+    "\\date{\\today}",
+    "\\begin{document}",
+    "\\maketitle",
+    body,
+    "\\end{document}",
+  ].join("\n")
+}
+
 function sanitizeFileStem(value) {
   return String(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "")
+}
+
+function waitForNextFrame() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve())
+  })
+}
+
+function revealPreparationDiagnosticsIfNeeded() {
+  if (!shouldScrollToPreparationDiagnostics || state.activeStep !== "preparation") {
+    return
+  }
+
+  shouldScrollToPreparationDiagnostics = false
+  const diagnosticsSection = elements.stepShell.querySelector(".preparation-diagnostics")
+  if (diagnosticsSection) {
+    diagnosticsSection.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+}
+
+function areSameStringArrays(left, right) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  const leftSorted = left.slice().sort()
+  const rightSorted = right.slice().sort()
+  return leftSorted.every((value, index) => value === rightSorted[index])
 }
 
 

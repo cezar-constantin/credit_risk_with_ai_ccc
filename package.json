@@ -1,0 +1,11 @@
+{
+  "name": "credit-risk-with-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local runner for the Credit risk with AI simulator",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "start:open": "node server.mjs --open"
+  }
+}

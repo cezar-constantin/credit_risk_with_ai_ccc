@@ -14,6 +14,9 @@ Interactive browser-based simulator for building a credit rating workflow end to
 - `index.html`: app shell
 - `styles.css`: visual design inspired by the existing teaching simulators
 - `app.js`: browser-side analytics, synchronized editors, exports, and rendering
+- `server.mjs`: lightweight local web server for browser-based local runs
+- `start-local.ps1`: Windows launcher that can open the app in the browser
+- `package.json`: local run scripts
 - `.github/workflows/deploy-pages.yml`: GitHub Pages deployment
 
 ## Deployment
@@ -29,3 +32,35 @@ This app is static and ready for GitHub Pages:
 - Data is processed in the browser.
 - R code and methodology are generated step by step from the live simulator state.
 - `Save & Sync` reads the state block embedded at the top of each editor and propagates changes back to the interface.
+
+## Run Locally
+
+### Option 1: npm
+
+```bash
+npm start
+```
+
+This serves the simulator at:
+
+```text
+http://127.0.0.1:4173/
+```
+
+To start the server and open the browser automatically:
+
+```bash
+npm run start:open
+```
+
+### Option 2: PowerShell
+
+```powershell
+.\start-local.ps1
+```
+
+To choose a different port:
+
+```powershell
+.\start-local.ps1 -Port 4300
+```

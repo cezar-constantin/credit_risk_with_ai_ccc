@@ -81,6 +81,23 @@
               <button class="secondary-button" id="export-full-pdf-button" type="button">Export full PDF</button>
             </div>
 
+            <section class="loading-card" id="loading-card" hidden aria-live="polite">
+              <div class="loading-header">
+                <div>
+                  <p class="card-kicker">Large file loading</p>
+                  <h3 id="loading-title">Preparing upload</h3>
+                </div>
+                <span class="loading-badge" id="loading-percent">0%</span>
+              </div>
+              <p class="loading-copy" id="loading-copy">
+                The browser is preparing the portfolio. Large files continue to parse in the background.
+              </p>
+              <div class="loading-progress-shell" aria-hidden="true">
+                <div class="loading-progress-fill" id="loading-progress-fill"></div>
+              </div>
+              <div class="loading-meta" id="loading-meta"></div>
+            </section>
+
             <div class="metric-grid" id="dataset-metrics"></div>
           </section>
 
@@ -115,6 +132,9 @@
           </button>
           <button class="tab-button" id="tab-button-estimation" type="button" role="tab" aria-selected="false" data-tab-target="estimation">
             Estimation
+          </button>
+          <button class="tab-button" id="tab-button-scoring" type="button" role="tab" aria-selected="false" data-tab-target="scoring">
+            Scoring
           </button>
           <button class="tab-button" id="tab-button-validation" type="button" role="tab" aria-selected="false" data-tab-target="validation">
             Validation
