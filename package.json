@@ -1,8 +1,8 @@
 {
-  "name": "credit-risk-with-ai",
+  "name": "credit-risk-with-ai-ccc",
   "version": "1.0.0",
   "private": true,
-  "description": "Local runner for the Credit risk with AI simulator",
+  "description": "Local runner for the Credit Risk with AI CCC simulator",
   "type": "module",
   "scripts": {
     "start": "node server.mjs",

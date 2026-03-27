@@ -1,6 +1,6 @@
-# Credit risk with AI
+# Credit Risk with AI CCC
 
-Interactive browser-based simulator for building a credit rating workflow end to end:
+Interactive browser-based simulator for building a credit rating workflow end to end, restyled to match the visual language of `neural_network_ccc`:
 
 - upload a portfolio dataset
 - prepare data and select variables
@@ -12,7 +12,7 @@ Interactive browser-based simulator for building a credit rating workflow end to
 ## Files
 
 - `index.html`: app shell
-- `styles.css`: visual design inspired by the existing teaching simulators
+- `styles.css`: CCC portfolio-style visual system inspired by `neural_network_ccc`
 - `app.js`: browser-side analytics, synchronized editors, exports, and rendering
 - `server.mjs`: lightweight local web server for browser-based local runs
 - `start-local.ps1`: Windows launcher that can open the app in the browser

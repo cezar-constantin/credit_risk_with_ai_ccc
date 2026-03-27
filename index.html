@@ -3,11 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Credit risk with AI</title>
+    <title>Credit Risk with AI CCC | Cezar Constantin</title>
     <meta
       name="description"
-      content="Interactive credit risk simulator with uploadable datasets, rating model development, synchronized R code and methodology, and Basel III / Basel IV RWA analytics."
+      content="Portfolio-styled credit risk simulator with uploadable datasets, rating model development, synchronized R code and methodology, and Basel III / Basel IV RWA analytics."
     />
+    <meta name="theme-color" content="#0B0F1A" />
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-M57R56L0G0"></script>
     <script>
       window.dataLayer = window.dataLayer || []
@@ -20,21 +21,56 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="page-shell">
+      <header class="site-header" aria-label="Site navigation">
+        <a class="brand-mark" href="https://www.cezar-constantin-chirila.com/portfolio/" target="_blank" rel="noreferrer">
+          <span class="brand-badge">CR</span>
+          <span class="brand-copy">
+            <strong>Credit Risk with AI CCC</strong>
+            <span>Portfolio-styled rating model and Basel analytics simulator</span>
+          </span>
+        </a>
+
+        <nav class="top-nav" aria-label="Section navigation">
+          <a class="nav-link" href="#experience-section">Simulator</a>
+          <a class="nav-link" href="#workflow-section">Workflow</a>
+          <a class="nav-link" href="#contact-section">Contact</a>
+        </nav>
+
+        <div class="header-actions">
+          <a class="header-chip" href="https://cezar-constantin.github.io/credit_risk_with_ai_ccc/" target="_blank" rel="noreferrer">
+            Live demo
+          </a>
+          <a class="header-chip is-strong" href="https://github.com/cezar-constantin/credit_risk_with_ai_ccc" target="_blank" rel="noreferrer">
+            GitHub repo
+          </a>
+        </div>
+      </header>
+
       <header class="hero card">
         <div class="hero-copy">
           <p class="eyebrow">Interactive credit risk studio</p>
-          <h1>Credit risk with AI</h1>
+          <h1>Credit Risk with AI</h1>
           <p class="hero-text">
             Upload a portfolio, shape a rating model step by step, and keep the interface, the R implementation, and
             the methodology aligned in one human-in-the-loop workflow.
           </p>
+          <p class="hero-performance">
+            Workflow coverage:
+            <strong>8 synchronized stages from data preparation to Basel capital analytics</strong>
+          </p>
+          <div class="hero-flow">
+            <span class="flow-chip">Portfolio upload</span>
+            <span class="flow-chip">Rating model build</span>
+            <span class="flow-chip">Validation and monitoring</span>
+            <span class="flow-chip">Basel III and Basel IV</span>
+          </div>
         </div>
         <div class="hero-badges">
           <article class="metric-chip">
@@ -53,134 +89,145 @@
         <a
           class="hero-qr-card"
           id="hero-qr-card"
-          href="https://cezar-constantin.github.io/credit_risk_with_ai/"
+          href="https://cezar-constantin.github.io/credit_risk_with_ai_ccc/"
           target="_blank"
           rel="noreferrer"
-          aria-label="Open the live Credit risk with AI simulator"
+          aria-label="Open the live Credit Risk with AI CCC simulator"
         >
           <span class="metric-label">Scan to open</span>
           <img
-            src="https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=https%3A%2F%2Fcezar-constantin.github.io%2Fcredit_risk_with_ai%2F"
-            alt="QR code linking to the live Credit risk with AI simulator"
+            src="https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=https%3A%2F%2Fcezar-constantin.github.io%2Fcredit_risk_with_ai_ccc%2F"
+            alt="QR code linking to the live Credit Risk with AI CCC simulator"
           />
           <span class="hero-qr-caption">Live simulator on GitHub Pages</span>
         </a>
       </header>
 
-      <section class="card workspace-card">
-        <div class="section-heading">
-          <div>
-            <p class="section-kicker">Portfolio workspace</p>
-            <h2>Upload, map, and govern the portfolio data</h2>
-          </div>
-          <span class="status-pill" id="workspace-status">Waiting for a dataset</span>
-        </div>
+      <section class="page-section" id="experience-section">
+        <section class="section-intro">
+          <p class="section-kicker">Interactive simulator</p>
+          <h2>Build, test, and challenge a credit rating workflow in one place.</h2>
+          <p>
+            The browser-side experience keeps portfolio ingestion, rating model construction, validation, calibration,
+            and capital analytics inside a single guided workspace so each modeling decision remains visible.
+          </p>
+        </section>
 
-        <p class="helper-copy">
-          The simulator runs locally in the browser. Portfolio data stays on the user side, while the platform
-          generates synchronized methodology and R code for every step.
-        </p>
-
-        <div class="workspace-grid">
-          <section class="upload-column">
-            <label class="upload-dropzone" for="file-input">
-              <input id="file-input" type="file" accept=".csv,.tsv,.txt" />
-              <strong>Drop a portfolio here or click to browse</strong>
-              <span>Supported in the browser: CSV, TSV, and delimited TXT files.</span>
-            </label>
-
-            <div class="button-row">
-              <button class="secondary-button" id="load-demo-button" type="button">Load demo portfolio</button>
-              <button class="ghost-button" id="reset-button" type="button">Reset</button>
-              <button class="primary-button" id="export-full-r-button" type="button">Export full .R</button>
-              <button class="secondary-button" id="export-full-pdf-button" type="button">Export full PDF</button>
+        <section class="card workspace-card" id="workflow-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Portfolio workspace</p>
+              <h2>Upload, map, and govern the portfolio data</h2>
             </div>
+            <span class="status-pill" id="workspace-status">Waiting for a dataset</span>
+          </div>
 
-            <section class="loading-card" id="loading-card" hidden aria-live="polite">
-              <div class="loading-header">
-                <div>
-                  <p class="card-kicker">Large file loading</p>
-                  <h3 id="loading-title">Preparing upload</h3>
+          <p class="helper-copy">
+            The simulator runs locally in the browser. Portfolio data stays on the user side, while the platform
+            generates synchronized methodology and R code for every step.
+          </p>
+
+          <div class="workspace-grid">
+            <section class="upload-column">
+              <label class="upload-dropzone" for="file-input">
+                <input id="file-input" type="file" accept=".csv,.tsv,.txt" />
+                <strong>Drop a portfolio here or click to browse</strong>
+                <span>Supported in the browser: CSV, TSV, and delimited TXT files.</span>
+              </label>
+
+              <div class="button-row">
+                <button class="secondary-button" id="load-demo-button" type="button">Load demo portfolio</button>
+                <button class="ghost-button" id="reset-button" type="button">Reset</button>
+                <button class="primary-button" id="export-full-r-button" type="button">Export full .R</button>
+                <button class="secondary-button" id="export-full-pdf-button" type="button">Export full PDF</button>
+              </div>
+
+              <section class="loading-card" id="loading-card" hidden aria-live="polite">
+                <div class="loading-header">
+                  <div>
+                    <p class="card-kicker">Large file loading</p>
+                    <h3 id="loading-title">Preparing upload</h3>
+                  </div>
+                  <span class="loading-badge" id="loading-percent">0%</span>
                 </div>
-                <span class="loading-badge" id="loading-percent">0%</span>
-              </div>
-              <p class="loading-copy" id="loading-copy">
-                The browser is preparing the portfolio. Large files continue to parse in the background.
-              </p>
-              <div class="loading-progress-shell" aria-hidden="true">
-                <div class="loading-progress-fill" id="loading-progress-fill"></div>
-              </div>
-              <div class="loading-meta" id="loading-meta"></div>
+                <p class="loading-copy" id="loading-copy">
+                  The browser is preparing the portfolio. Large files continue to parse in the background.
+                </p>
+                <div class="loading-progress-shell" aria-hidden="true">
+                  <div class="loading-progress-fill" id="loading-progress-fill"></div>
+                </div>
+                <div class="loading-meta" id="loading-meta"></div>
+              </section>
+
+              <div class="metric-grid" id="dataset-metrics"></div>
             </section>
 
-            <div class="metric-grid" id="dataset-metrics"></div>
-          </section>
+            <section class="mapping-column">
+              <div class="field-grid" id="global-field-grid"></div>
 
-          <section class="mapping-column">
-            <div class="field-grid" id="global-field-grid"></div>
-
-            <div class="preview-card">
-              <div class="preview-header">
-                <div>
-                  <p class="card-kicker">Sample rows</p>
-                  <h3>Dataset preview</h3>
+              <div class="preview-card">
+                <div class="preview-header">
+                  <div>
+                    <p class="card-kicker">Sample rows</p>
+                    <h3>Dataset preview</h3>
+                  </div>
+                  <span class="preview-caption" id="preview-caption">Load a portfolio to inspect its structure.</span>
                 </div>
-                <span class="preview-caption" id="preview-caption">Load a portfolio to inspect its structure.</span>
+                <div class="table-shell" id="dataset-preview"></div>
               </div>
-              <div class="table-shell" id="dataset-preview"></div>
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <section class="tabs card" aria-label="Simulator stages">
-        <div class="mobile-step-nav" id="mobile-step-nav" hidden>
-          <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
-          <div class="mobile-step-current">
-            <span class="metric-label">Current step</span>
-            <strong id="mobile-step-label">Data preparation</strong>
-            <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 8</span>
+            </section>
           </div>
-          <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
-        </div>
-        <div class="tab-list" role="tablist">
-          <button
-            class="tab-button is-active"
-            id="tab-button-preparation"
-            type="button"
-            role="tab"
-            aria-selected="true"
-            data-tab-target="preparation"
-          >
-            Data Preparation
-          </button>
-          <button class="tab-button" id="tab-button-estimation" type="button" role="tab" aria-selected="false" data-tab-target="estimation">
-            Estimation
-          </button>
-          <button class="tab-button" id="tab-button-scoring" type="button" role="tab" aria-selected="false" data-tab-target="scoring">
-            Scoring
-          </button>
-          <button class="tab-button" id="tab-button-validation" type="button" role="tab" aria-selected="false" data-tab-target="validation">
-            Validation
-          </button>
-          <button class="tab-button" id="tab-button-monitoring" type="button" role="tab" aria-selected="false" data-tab-target="monitoring">
-            Monitoring
-          </button>
-          <button class="tab-button" id="tab-button-calibration" type="button" role="tab" aria-selected="false" data-tab-target="calibration">
-            Calibration
-          </button>
-          <button class="tab-button" id="tab-button-basel3" type="button" role="tab" aria-selected="false" data-tab-target="basel3">
-            Basel III RWA
-          </button>
-          <button class="tab-button" id="tab-button-basel4" type="button" role="tab" aria-selected="false" data-tab-target="basel4">
-            Basel IV RWA
-          </button>
-        </div>
+        </section>
+
+        <section class="tabs card" aria-label="Simulator stages">
+          <div class="mobile-step-nav" id="mobile-step-nav" hidden>
+            <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
+            <div class="mobile-step-current">
+              <span class="metric-label">Current step</span>
+              <strong id="mobile-step-label">Data preparation</strong>
+              <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 8</span>
+            </div>
+            <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
+          </div>
+          <div class="tab-list" role="tablist">
+            <button
+              class="tab-button is-active"
+              id="tab-button-preparation"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              data-tab-target="preparation"
+            >
+              Data Preparation
+            </button>
+            <button class="tab-button" id="tab-button-estimation" type="button" role="tab" aria-selected="false" data-tab-target="estimation">
+              Estimation
+            </button>
+            <button class="tab-button" id="tab-button-scoring" type="button" role="tab" aria-selected="false" data-tab-target="scoring">
+              Scoring
+            </button>
+            <button class="tab-button" id="tab-button-validation" type="button" role="tab" aria-selected="false" data-tab-target="validation">
+              Validation
+            </button>
+            <button class="tab-button" id="tab-button-monitoring" type="button" role="tab" aria-selected="false" data-tab-target="monitoring">
+              Monitoring
+            </button>
+            <button class="tab-button" id="tab-button-calibration" type="button" role="tab" aria-selected="false" data-tab-target="calibration">
+              Calibration
+            </button>
+            <button class="tab-button" id="tab-button-basel3" type="button" role="tab" aria-selected="false" data-tab-target="basel3">
+              Basel III RWA
+            </button>
+            <button class="tab-button" id="tab-button-basel4" type="button" role="tab" aria-selected="false" data-tab-target="basel4">
+              Basel IV RWA
+            </button>
+          </div>
+        </section>
+
+        <main class="step-shell" id="active-step-shell" aria-live="polite"></main>
       </section>
 
-      <main class="step-shell" id="active-step-shell" aria-live="polite"></main>
-
-      <section class="footer-panel-grid" aria-label="Support and disclaimer">
+      <section class="footer-panel-grid" id="contact-section" aria-label="Support and disclaimer">
         <section class="card support-card">
           <div class="section-heading">
             <div>
