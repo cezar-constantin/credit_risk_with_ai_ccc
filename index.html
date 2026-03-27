@@ -39,18 +39,9 @@
 
         <nav class="top-nav" aria-label="Section navigation">
           <a class="nav-link" href="#experience-section">Simulator</a>
-          <a class="nav-link" href="#workflow-section">Workflow</a>
+          <a class="nav-link" href="#workspace-section">Workflow</a>
           <a class="nav-link" href="#contact-section">Contact</a>
         </nav>
-
-        <div class="header-actions">
-          <a class="header-chip" href="https://cezar-constantin.github.io/credit_risk_with_ai_ccc/" target="_blank" rel="noreferrer">
-            Live demo
-          </a>
-          <a class="header-chip is-strong" href="https://github.com/cezar-constantin/credit_risk_with_ai_ccc" target="_blank" rel="noreferrer">
-            GitHub repo
-          </a>
-        </div>
       </header>
 
       <header class="hero card">
@@ -63,28 +54,8 @@
           </p>
           <p class="hero-performance">
             Workflow coverage:
-            <strong>8 synchronized stages from data preparation to Basel capital analytics</strong>
+            <strong>9 synchronized stages from portfolio intake to Basel capital analytics</strong>
           </p>
-          <div class="hero-flow">
-            <span class="flow-chip">Portfolio upload</span>
-            <span class="flow-chip">Rating model build</span>
-            <span class="flow-chip">Validation and monitoring</span>
-            <span class="flow-chip">Basel III and Basel IV</span>
-          </div>
-        </div>
-        <div class="hero-badges">
-          <article class="metric-chip">
-            <span class="metric-label">Dataset</span>
-            <strong id="hero-dataset">Waiting for upload</strong>
-          </article>
-          <article class="metric-chip">
-            <span class="metric-label">Rows</span>
-            <strong id="hero-rows">0 loaded</strong>
-          </article>
-          <article class="metric-chip">
-            <span class="metric-label">Model status</span>
-            <strong id="hero-model-status">No model estimated</strong>
-          </article>
         </div>
         <a
           class="hero-qr-card"
@@ -113,7 +84,62 @@
           </p>
         </section>
 
-        <section class="card workspace-card" id="workflow-section">
+        <section class="tabs card" aria-label="Simulator stages">
+          <div class="mobile-step-nav" id="mobile-step-nav" hidden>
+            <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
+            <div class="mobile-step-current">
+              <span class="metric-label">Current step</span>
+              <strong id="mobile-step-label">Portfolio workspace</strong>
+              <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 9</span>
+            </div>
+            <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
+          </div>
+          <div class="tab-list" role="tablist">
+            <button
+              class="tab-button is-active"
+              id="tab-button-workspace"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              data-tab-target="workspace"
+            >
+              Portfolio Workspace
+            </button>
+            <button
+              class="tab-button"
+              id="tab-button-preparation"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              data-tab-target="preparation"
+            >
+              Data Preparation
+            </button>
+            <button class="tab-button" id="tab-button-estimation" type="button" role="tab" aria-selected="false" data-tab-target="estimation">
+              Estimation
+            </button>
+            <button class="tab-button" id="tab-button-scoring" type="button" role="tab" aria-selected="false" data-tab-target="scoring">
+              Scoring
+            </button>
+            <button class="tab-button" id="tab-button-validation" type="button" role="tab" aria-selected="false" data-tab-target="validation">
+              Validation
+            </button>
+            <button class="tab-button" id="tab-button-monitoring" type="button" role="tab" aria-selected="false" data-tab-target="monitoring">
+              Monitoring
+            </button>
+            <button class="tab-button" id="tab-button-calibration" type="button" role="tab" aria-selected="false" data-tab-target="calibration">
+              Calibration
+            </button>
+            <button class="tab-button" id="tab-button-basel3" type="button" role="tab" aria-selected="false" data-tab-target="basel3">
+              Basel III RWA
+            </button>
+            <button class="tab-button" id="tab-button-basel4" type="button" role="tab" aria-selected="false" data-tab-target="basel4">
+              Basel IV RWA
+            </button>
+          </div>
+        </section>
+
+        <section class="card workspace-card" id="workspace-section">
           <div class="section-heading">
             <div>
               <p class="section-kicker">Portfolio workspace</p>
@@ -176,51 +202,6 @@
                 <div class="table-shell" id="dataset-preview"></div>
               </div>
             </section>
-          </div>
-        </section>
-
-        <section class="tabs card" aria-label="Simulator stages">
-          <div class="mobile-step-nav" id="mobile-step-nav" hidden>
-            <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
-            <div class="mobile-step-current">
-              <span class="metric-label">Current step</span>
-              <strong id="mobile-step-label">Data preparation</strong>
-              <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 8</span>
-            </div>
-            <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
-          </div>
-          <div class="tab-list" role="tablist">
-            <button
-              class="tab-button is-active"
-              id="tab-button-preparation"
-              type="button"
-              role="tab"
-              aria-selected="true"
-              data-tab-target="preparation"
-            >
-              Data Preparation
-            </button>
-            <button class="tab-button" id="tab-button-estimation" type="button" role="tab" aria-selected="false" data-tab-target="estimation">
-              Estimation
-            </button>
-            <button class="tab-button" id="tab-button-scoring" type="button" role="tab" aria-selected="false" data-tab-target="scoring">
-              Scoring
-            </button>
-            <button class="tab-button" id="tab-button-validation" type="button" role="tab" aria-selected="false" data-tab-target="validation">
-              Validation
-            </button>
-            <button class="tab-button" id="tab-button-monitoring" type="button" role="tab" aria-selected="false" data-tab-target="monitoring">
-              Monitoring
-            </button>
-            <button class="tab-button" id="tab-button-calibration" type="button" role="tab" aria-selected="false" data-tab-target="calibration">
-              Calibration
-            </button>
-            <button class="tab-button" id="tab-button-basel3" type="button" role="tab" aria-selected="false" data-tab-target="basel3">
-              Basel III RWA
-            </button>
-            <button class="tab-button" id="tab-button-basel4" type="button" role="tab" aria-selected="false" data-tab-target="basel4">
-              Basel IV RWA
-            </button>
           </div>
         </section>
 

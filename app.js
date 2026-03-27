@@ -1,5 +1,13 @@
 ﻿const STEP_DEFINITIONS = [
   {
+    key: "workspace",
+    label: "Portfolio workspace",
+    kicker: "Intake",
+    title: "Upload, map, and govern the portfolio data",
+    description:
+      "Load the portfolio, map the global fields, inspect the structure, and prepare the simulator inputs before feature engineering begins.",
+  },
+  {
     key: "preparation",
     label: "Data preparation",
     kicker: "Foundation",
@@ -89,6 +97,7 @@ const DEFAULT_GLOBAL_CONFIG = {
 }
 
 const DEFAULT_STEP_CONFIGS = {
+  workspace: {},
   preparation: {
     missingStrategy: "median_mode",
     binCount: 5,
@@ -155,6 +164,10 @@ const DEFAULT_STEP_CONFIGS = {
 }
 
 const DEFAULT_NOTES = {
+  workspace: {
+    code: "Document dataset lineage, upload assumptions, or field-mapping decisions here.",
+    methodology: "Capture portfolio scope, data governance, and mapping rationale here.",
+  },
   preparation: {
     code: "Add portfolio-specific preparation notes here. This section is preserved after Save & Sync.",
     methodology: "Add business rules, governance limits, or data lineage notes here.",
@@ -189,7 +202,6 @@ const DEFAULT_NOTES = {
   },
 }
 
-const HERO_EMPTY_MODEL_TEXT = "No model estimated"
 const MAX_TRACKED_DISTINCT_VALUES = 51
 const ALLOWED_BINARY_VALUES = new Set(["0", "1", "true", "false", "yes", "no", "default", "non-default", "good", "bad"])
 const DEMO_DATASET_ASSET = "./data/rating_model_data.csv"
@@ -197,10 +209,8 @@ const DEMO_DATASET_FILE_NAME = "rating_model_data.csv"
 const CONTACT_FORM_ENDPOINT = "https://formsubmit.co/ajax/cezar.chirila@helvetic-ai-compass.ch"
 
 const elements = {
-  heroDataset: document.getElementById("hero-dataset"),
-  heroRows: document.getElementById("hero-rows"),
-  heroModelStatus: document.getElementById("hero-model-status"),
   heroQrCard: document.getElementById("hero-qr-card"),
+  workspaceSection: document.getElementById("workspace-section"),
   workspaceStatus: document.getElementById("workspace-status"),
   fileInput: document.getElementById("file-input"),
   loadDemoButton: document.getElementById("load-demo-button"),
@@ -248,7 +258,7 @@ function bootstrap() {
 
 function createInitialState() {
   return {
-    activeStep: "preparation",
+    activeStep: "workspace",
     datasetName: "",
     rows: [],
     metadata: null,
@@ -1259,33 +1269,11 @@ function saveDocument(stepKey, documentType) {
 }
 
 function renderAll() {
-  renderHero()
   renderWorkspace()
   renderLoadingState()
   renderTabs()
   renderActiveStep()
   revealPreparationDiagnosticsIfNeeded()
-}
-
-function renderHero() {
-  const estimation = state.derived.estimation
-  const isLoading = state.loading.active
-  elements.heroDataset.textContent = isLoading ? state.loading.fileName || state.datasetName || "Waiting for upload" : state.datasetName || "Waiting for upload"
-  elements.heroRows.textContent = isLoading
-    ? `${formatInteger(state.loading.parsedRows)} parsed so far`
-    : state.rows.length
-      ? `${formatInteger(state.rows.length)} loaded`
-      : "0 loaded"
-
-  if (isLoading) {
-    elements.heroModelStatus.textContent = "Upload in progress"
-  } else if (estimation?.ready) {
-    elements.heroModelStatus.textContent = `Live scorecard with ${estimation.finalFeatures.length} features`
-  } else if (state.derived.preparation?.ready) {
-    elements.heroModelStatus.textContent = "Data prepared, model not estimated"
-  } else {
-    elements.heroModelStatus.textContent = HERO_EMPTY_MODEL_TEXT
-  }
 }
 
 function renderWorkspace() {
@@ -1326,9 +1314,6 @@ function renderLoadingState() {
   elements.loadingCopy.textContent = loading.message || "The file is still loading."
   elements.loadingPercent.textContent = `${percent}%`
   elements.loadingProgressFill.style.width = `${percent}%`
-  elements.heroDataset.textContent = loading.fileName || "Waiting for upload"
-  elements.heroRows.textContent = `${formatInteger(loading.parsedRows)} parsed so far`
-  elements.heroModelStatus.textContent = "Upload in progress"
   elements.workspaceStatus.textContent = `Loading ${loading.fileName || "dataset"}`
   elements.previewCaption.textContent = `${formatBytes(loading.loadedBytes)} read so far.`
 
@@ -1367,6 +1352,14 @@ function renderTabs() {
 }
 
 function renderActiveStep() {
+  const isWorkspaceStep = state.activeStep === "workspace"
+  elements.workspaceSection.hidden = !isWorkspaceStep
+  elements.stepShell.hidden = isWorkspaceStep
+  if (isWorkspaceStep) {
+    elements.stepShell.innerHTML = ""
+    return
+  }
+
   const stepDefinition = getStepDefinition(state.activeStep)
   const derived = state.derived[state.activeStep]
   const statusText = state.loading.active ? "Loading" : derived?.ready ? "Live" : state.metadata ? "Needs attention" : "Template mode"
@@ -2961,6 +2954,37 @@ function buildCodeBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
+    case "workspace": {
+      const mappedFields = Object.entries(state.global).filter(([, value]) => value)
+      const mappingLines = mappedFields.length
+        ? mappedFields.map(([configKey, value]) => `${configKey} <- ${quoteRString(value)}`)
+        : ["# No global field mappings have been confirmed yet."]
+      const datasetSummary = state.metadata
+        ? `# Browser summary: ${state.metadata.rows.length} rows, ${state.metadata.columns.length} columns, dataset ${state.datasetName || "portfolio.csv"}.`
+        : "# Browser summary: Load a dataset to inspect the portfolio workspace."
+
+      return [
+        "###############################################################################",
+        "# Credit risk with AI - Portfolio Workspace",
+        "###############################################################################",
+        "rm(list = ls())",
+        "",
+        "library(readr)",
+        "library(dplyr)",
+        "",
+        `dataset_file <- ${quoteRString(state.datasetName || "portfolio.csv")}`,
+        "dataset <- read_csv(dataset_file, show_col_types = FALSE)",
+        "",
+        "# Global field mapping",
+        ...mappingLines,
+        "",
+        "# Recommended first checks",
+        "glimpse(dataset)",
+        "summary(dataset)",
+        "",
+        datasetSummary,
+      ].join("\n")
+    }
     case "preparation": {
       const datasetFile = quoteRString(state.datasetName || "portfolio.csv")
       const targetColumn = quoteRString(state.global.targetColumn || "Default_Flag")
@@ -3585,6 +3609,27 @@ function buildMethodologyBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
+    case "workspace": {
+      const mappedFields = Object.entries(state.global)
+        .filter(([, value]) => value)
+        .map(([configKey, value]) => `${configKey} mapped to ${value}`)
+      const summaryItems = state.metadata
+        ? [
+            `Dataset loaded in the browser workspace: ${state.datasetName || "portfolio.csv"}.`,
+            `Observed structure: ${state.metadata.rows.length} rows and ${state.metadata.columns.length} columns.`,
+            mappedFields.length ? `Mapped fields: ${mappedFields.join("; ")}.` : "Mapped fields: no global mappings confirmed yet.",
+          ]
+        : ["No dataset has been loaded yet.", "Global field mapping remains pending until a portfolio is uploaded."]
+
+      return [
+        "\\section{Portfolio Workspace}",
+        "The simulator begins with a browser-side portfolio workspace where the user uploads the source file, reviews the inferred structure, and maps the global fields required by downstream modeling steps.",
+        "",
+        ...latexItemizeLines(summaryItems.map((item) => escapeLatex(item))),
+        "",
+        "This stage remains local to the browser so the user can inspect the portfolio before feature engineering, model estimation, validation, and capital analytics are activated.",
+      ].join("\n")
+    }
     case "preparation": {
       const configuredShares = escapeLatex(
         [
