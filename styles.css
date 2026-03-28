@@ -1334,9 +1334,9 @@ body::after {
 .brand-logo {
   display: block;
   flex: 0 0 auto;
-  width: auto;
-  height: 34px;
-  max-width: 76px;
+  width: 148px;
+  height: auto;
+  max-width: 100%;
 }
 
 .brand-copy {
@@ -2022,8 +2022,7 @@ body.is-mobile-device .brand-copy span {
 }
 
 body.is-mobile-device .brand-logo {
-  height: 28px;
-  max-width: 62px;
+  width: 124px;
 }
 
 body.is-mobile-device .section-intro h2,
