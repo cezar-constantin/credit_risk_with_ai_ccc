@@ -1334,8 +1334,9 @@ body::after {
 .brand-logo {
   display: block;
   flex: 0 0 auto;
-  width: 88px;
-  height: auto;
+  width: auto;
+  height: 34px;
+  max-width: 76px;
 }
 
 .brand-copy {
@@ -2021,7 +2022,8 @@ body.is-mobile-device .brand-copy span {
 }
 
 body.is-mobile-device .brand-logo {
-  width: 72px;
+  height: 28px;
+  max-width: 62px;
 }
 
 body.is-mobile-device .section-intro h2,
