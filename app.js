@@ -222,7 +222,6 @@ const DEMO_DATASET_FILE_NAME = "rating_model_data.csv"
 const CONTACT_FORM_ENDPOINT = "https://formsubmit.co/ajax/cezar.chirila@helvetic-ai-compass.ch"
 
 const elements = {
-  heroQrCard: document.getElementById("hero-qr-card"),
   descriptionSection: document.getElementById("description-section"),
   workspaceSection: document.getElementById("workspace-section"),
   workspaceStatus: document.getElementById("workspace-status"),
@@ -374,10 +373,6 @@ function initializeResponsiveMode() {
     document.body.classList.toggle("is-mobile-device", isMobileExperience)
     document.body.dataset.mobileModeReady = "true"
     elements.mobileStepNav.hidden = !isMobileExperience
-    if (elements.heroQrCard) {
-      elements.heroQrCard.hidden = isMobileExperience
-    }
-
     renderTabs()
   }
 
