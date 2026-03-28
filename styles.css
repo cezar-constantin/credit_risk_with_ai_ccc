@@ -1406,24 +1406,10 @@ body::after {
 }
 
 .header-tab-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
+  min-height: 48px;
+  padding: 12px 18px;
   white-space: nowrap;
-  transition:
-    color var(--transition),
-    border-color var(--transition),
-    background var(--transition),
-    transform var(--transition),
-    box-shadow var(--transition);
+  flex: 0 0 auto;
 }
 
 .nav-link {
@@ -1431,23 +1417,14 @@ body::after {
 }
 
 .nav-link:hover,
-.header-tab-button:hover,
 .header-chip:hover,
 .contact-copy a:hover {
   color: var(--text);
 }
 
 .nav-link:hover,
-.header-tab-button:hover,
 .header-chip:hover {
   transform: translateY(-1px);
-}
-
-.header-tab-button.is-active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(34, 211, 238, 0.18));
-  color: var(--text);
-  border-color: rgba(34, 211, 238, 0.22);
-  box-shadow: 0 18px 36px rgba(34, 211, 238, 0.16);
 }
 
 .header-chip {

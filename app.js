@@ -1381,8 +1381,11 @@ function renderActiveStep() {
   const isDescriptionStep = state.activeStep === "description"
   const isWorkspaceStep = state.activeStep === "workspace"
   elements.descriptionSection.hidden = !isDescriptionStep
+  elements.descriptionSection.style.display = isDescriptionStep ? "" : "none"
   elements.workspaceSection.hidden = !isWorkspaceStep
+  elements.workspaceSection.style.display = isWorkspaceStep ? "" : "none"
   elements.stepShell.hidden = isDescriptionStep || isWorkspaceStep
+  elements.stepShell.style.display = isDescriptionStep || isWorkspaceStep ? "none" : ""
   if (isDescriptionStep || isWorkspaceStep) {
     elements.stepShell.innerHTML = ""
     return
