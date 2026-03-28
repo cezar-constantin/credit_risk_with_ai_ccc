@@ -1334,9 +1334,10 @@ body::after {
 .brand-logo {
   display: block;
   flex: 0 0 auto;
-  width: 148px;
-  height: auto;
-  max-width: 100%;
+  width: auto;
+  height: 66px;
+  max-width: 148px;
+  max-height: 66px;
 }
 
 .brand-copy {
@@ -1400,8 +1401,8 @@ body::after {
 }
 
 .header-tab-button {
-  min-height: 48px;
-  padding: 12px 18px;
+  min-height: 40px;
+  padding: 0 14px;
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -2022,7 +2023,10 @@ body.is-mobile-device .brand-copy span {
 }
 
 body.is-mobile-device .brand-logo {
-  width: 124px;
+  width: auto;
+  height: 55px;
+  max-width: 124px;
+  max-height: 55px;
 }
 
 body.is-mobile-device .section-intro h2,
