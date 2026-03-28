@@ -37,10 +37,17 @@
           </span>
         </a>
 
-        <nav class="top-nav" aria-label="Section navigation">
-          <a class="nav-link" href="#experience-section">Simulator</a>
-          <a class="nav-link" href="#workspace-section">Workflow</a>
-          <a class="nav-link" href="#contact-section">Contact</a>
+        <nav class="top-nav top-tab-list" aria-label="Simulator steps">
+          <button class="header-tab-button is-active" type="button" data-tab-target="description">Description</button>
+          <button class="header-tab-button" type="button" data-tab-target="workspace">Portfolio Workspace</button>
+          <button class="header-tab-button" type="button" data-tab-target="preparation">Data Preparation</button>
+          <button class="header-tab-button" type="button" data-tab-target="estimation">Estimation</button>
+          <button class="header-tab-button" type="button" data-tab-target="scoring">Scoring</button>
+          <button class="header-tab-button" type="button" data-tab-target="validation">Validation</button>
+          <button class="header-tab-button" type="button" data-tab-target="monitoring">Monitoring</button>
+          <button class="header-tab-button" type="button" data-tab-target="calibration">Calibration</button>
+          <button class="header-tab-button" type="button" data-tab-target="basel3">Basel III RWA</button>
+          <button class="header-tab-button" type="button" data-tab-target="basel4">Basel IV RWA</button>
         </nav>
       </header>
 
@@ -54,7 +61,7 @@
           </p>
           <p class="hero-performance">
             Workflow coverage:
-            <strong>9 synchronized stages from portfolio intake to Basel capital analytics</strong>
+            <strong>10 synchronized stages from orientation to Basel capital analytics</strong>
           </p>
         </div>
         <a
@@ -89,18 +96,28 @@
             <button class="secondary-button small-button" id="mobile-step-prev" type="button">Previous</button>
             <div class="mobile-step-current">
               <span class="metric-label">Current step</span>
-              <strong id="mobile-step-label">Portfolio workspace</strong>
-              <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 9</span>
+              <strong id="mobile-step-label">Description</strong>
+              <span class="mobile-step-meta" id="mobile-step-meta">Step 1 of 10</span>
             </div>
             <button class="secondary-button small-button" id="mobile-step-next" type="button">Next</button>
           </div>
           <div class="tab-list" role="tablist">
             <button
               class="tab-button is-active"
-              id="tab-button-workspace"
+              id="tab-button-description"
               type="button"
               role="tab"
               aria-selected="true"
+              data-tab-target="description"
+            >
+              Description
+            </button>
+            <button
+              class="tab-button"
+              id="tab-button-workspace"
+              type="button"
+              role="tab"
+              aria-selected="false"
               data-tab-target="workspace"
             >
               Portfolio Workspace
@@ -136,6 +153,119 @@
             <button class="tab-button" id="tab-button-basel4" type="button" role="tab" aria-selected="false" data-tab-target="basel4">
               Basel IV RWA
             </button>
+          </div>
+        </section>
+
+        <section class="card description-card" id="description-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Description</p>
+              <h2>A guided walk-through of the simulator</h2>
+            </div>
+            <span class="status-pill">Start here</span>
+          </div>
+
+          <p class="helper-copy">
+            This simulator is designed to help you move through a full credit risk workflow in a clear order, from
+            portfolio intake through rating model design, validation, monitoring, calibration, and Basel capital views.
+          </p>
+
+          <div class="description-grid">
+            <article class="description-panel">
+              <p class="card-kicker">What this simulator does</p>
+              <h3>Turn a complex workflow into a step-by-step experience</h3>
+              <ul class="description-list">
+                <li>Load a portfolio or start with the bundled demo dataset.</li>
+                <li>Map the required fields once and reuse them across all downstream tabs.</li>
+                <li>Prepare features, estimate a scorecard, test performance, and inspect capital outputs.</li>
+                <li>Export synchronized R code and methodology as you move through the workflow.</li>
+              </ul>
+            </article>
+
+            <article class="description-panel">
+              <p class="card-kicker">Recommended path</p>
+              <h3>Follow the tabs from left to right</h3>
+              <ol class="description-list is-numbered">
+                <li>Begin with <strong>Description</strong> to understand the logic and expected outputs.</li>
+                <li>Open <strong>Portfolio Workspace</strong> to upload data, map fields, and inspect the portfolio.</li>
+                <li>Continue through the modeling tabs in sequence so each result builds on the previous one.</li>
+                <li>Use the monitoring, calibration, and Basel views once the scorecard is ready.</li>
+              </ol>
+            </article>
+
+            <article class="description-panel">
+              <p class="card-kicker">Best first run</p>
+              <h3>Get familiar in a few minutes</h3>
+              <p class="helper-copy">
+                If this is your first visit, load the demo portfolio, confirm the suggested mappings, and walk through
+                each tab once without changing too many parameters. That gives you a fast end-to-end view before you
+                start testing your own portfolio assumptions.
+              </p>
+            </article>
+
+            <article class="description-panel">
+              <p class="card-kicker">What you will get</p>
+              <h3>Operational outputs, not just visuals</h3>
+              <ul class="description-list">
+                <li>Interactive diagnostics for feature quality, model performance, and portfolio drift.</li>
+                <li>Portable R code for each stage of the workflow.</li>
+                <li>Methodology text that stays aligned with the active simulator state.</li>
+                <li>Basel III and Basel IV views that make capital implications easier to explain.</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="description-stage-grid" aria-label="Workflow overview">
+            <article class="description-stage-card">
+              <span class="metric-label">1</span>
+              <strong>Description</strong>
+              <p>Understand the simulator flow before you begin.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">2</span>
+              <strong>Portfolio Workspace</strong>
+              <p>Upload data, map fields, and inspect the structure.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">3</span>
+              <strong>Data Preparation</strong>
+              <p>Profile quality, split samples, and engineer features.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">4</span>
+              <strong>Estimation</strong>
+              <p>Fit the scorecard and translate it into ratings.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">5</span>
+              <strong>Scoring</strong>
+              <p>Test individual scenarios and inspect the bucket logic.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">6</span>
+              <strong>Validation</strong>
+              <p>Check ranking power and stability outside development.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">7</span>
+              <strong>Monitoring</strong>
+              <p>Look for drift, default pressure, and migration signals.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">8</span>
+              <strong>Calibration</strong>
+              <p>Re-anchor PDs and assess the impact on ratings.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">9</span>
+              <strong>Basel III RWA</strong>
+              <p>Translate modeled risk into IRB-style capital views.</p>
+            </article>
+            <article class="description-stage-card">
+              <span class="metric-label">10</span>
+              <strong>Basel IV RWA</strong>
+              <p>Layer floors, standardized comparisons, and output-floor effects.</p>
+            </article>
           </div>
         </section>
 

@@ -1,5 +1,13 @@
 ﻿const STEP_DEFINITIONS = [
   {
+    key: "description",
+    label: "Description",
+    kicker: "Overview",
+    title: "Understand the simulator before you begin",
+    description:
+      "Start with a guided presentation of the workflow, the recommended navigation order, and the outputs you can expect before moving into the portfolio and modeling tabs.",
+  },
+  {
     key: "workspace",
     label: "Portfolio workspace",
     kicker: "Intake",
@@ -97,6 +105,7 @@ const DEFAULT_GLOBAL_CONFIG = {
 }
 
 const DEFAULT_STEP_CONFIGS = {
+  description: {},
   workspace: {},
   preparation: {
     missingStrategy: "median_mode",
@@ -164,6 +173,10 @@ const DEFAULT_STEP_CONFIGS = {
 }
 
 const DEFAULT_NOTES = {
+  description: {
+    code: "Document onboarding notes, teaching context, or simulator introduction guidance here.",
+    methodology: "Capture the presentation framing, audience, and recommended learning path here.",
+  },
   workspace: {
     code: "Document dataset lineage, upload assumptions, or field-mapping decisions here.",
     methodology: "Capture portfolio scope, data governance, and mapping rationale here.",
@@ -210,6 +223,7 @@ const CONTACT_FORM_ENDPOINT = "https://formsubmit.co/ajax/cezar.chirila@helvetic
 
 const elements = {
   heroQrCard: document.getElementById("hero-qr-card"),
+  descriptionSection: document.getElementById("description-section"),
   workspaceSection: document.getElementById("workspace-section"),
   workspaceStatus: document.getElementById("workspace-status"),
   fileInput: document.getElementById("file-input"),
@@ -237,7 +251,7 @@ const elements = {
   contactForm: document.getElementById("contact-form"),
   contactSubmitButton: document.getElementById("contact-submit-button"),
   contactStatus: document.getElementById("contact-status"),
-  tabButtons: Array.from(document.querySelectorAll(".tab-button")),
+  tabButtons: Array.from(document.querySelectorAll(".tab-button, .header-tab-button")),
 }
 
 let toastTimer = null
@@ -258,7 +272,7 @@ function bootstrap() {
 
 function createInitialState() {
   return {
-    activeStep: "workspace",
+    activeStep: "description",
     datasetName: "",
     rows: [],
     metadata: null,
@@ -342,7 +356,9 @@ function bindGlobalEvents() {
 
   elements.tabButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      activateStep(button.dataset.tabTarget, { scrollToStep: isMobileExperience })
+      activateStep(button.dataset.tabTarget, {
+        scrollToStep: isMobileExperience || button.classList.contains("header-tab-button"),
+      })
     })
   })
 }
@@ -391,9 +407,19 @@ function activateStep(stepKey, options = {}) {
 
   if (options.scrollToStep) {
     window.requestAnimationFrame(() => {
-      elements.stepShell.scrollIntoView({ behavior: "smooth", block: "start" })
+      getActiveStepScrollTarget().scrollIntoView({ behavior: "smooth", block: "start" })
     })
   }
+}
+
+function getActiveStepScrollTarget() {
+  if (state.activeStep === "description") {
+    return elements.descriptionSection
+  }
+  if (state.activeStep === "workspace") {
+    return elements.workspaceSection
+  }
+  return elements.stepShell
 }
 
 function navigateStepByOffset(offset) {
@@ -1352,10 +1378,12 @@ function renderTabs() {
 }
 
 function renderActiveStep() {
+  const isDescriptionStep = state.activeStep === "description"
   const isWorkspaceStep = state.activeStep === "workspace"
+  elements.descriptionSection.hidden = !isDescriptionStep
   elements.workspaceSection.hidden = !isWorkspaceStep
-  elements.stepShell.hidden = isWorkspaceStep
-  if (isWorkspaceStep) {
+  elements.stepShell.hidden = isDescriptionStep || isWorkspaceStep
+  if (isDescriptionStep || isWorkspaceStep) {
     elements.stepShell.innerHTML = ""
     return
   }
@@ -2954,6 +2982,20 @@ function buildCodeBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
+    case "description":
+      return [
+        "###############################################################################",
+        "# Credit risk with AI - Description",
+        "###############################################################################",
+        "# This section introduces the simulator before any portfolio data is loaded.",
+        "# Recommended order: Description -> Portfolio Workspace -> Data Preparation ->",
+        "# Estimation -> Scoring -> Validation -> Monitoring -> Calibration ->",
+        "# Basel III RWA -> Basel IV RWA.",
+        "",
+        "# The simulator keeps the interface, the generated R code, and the methodology",
+        "# synchronized so the user can move from exploration to implementation without",
+        "# losing the narrative of the workflow.",
+      ].join("\n")
     case "workspace": {
       const mappedFields = Object.entries(state.global).filter(([, value]) => value)
       const mappingLines = mappedFields.length
@@ -3609,6 +3651,20 @@ function buildMethodologyBody(stepKey) {
   const basel4 = state.derived.basel4
 
   switch (stepKey) {
+    case "description":
+      return [
+        "\\section{Description}",
+        "This simulator is structured as a guided learning and working environment for an end-to-end credit risk workflow.",
+        "",
+        ...latexItemizeLines([
+          escapeLatex("Start with the Description tab to understand the workflow and outputs."),
+          escapeLatex("Use Portfolio Workspace to upload data, map fields, and inspect the portfolio structure."),
+          escapeLatex("Progress through preparation, estimation, scoring, validation, monitoring, calibration, and capital tabs in sequence."),
+          escapeLatex("Export synchronized R code and methodology whenever a stage is ready."),
+        ]),
+        "",
+        "The goal is to make a multi-stage modeling process easier to follow, easier to explain, and easier to connect with implementation artifacts.",
+      ].join("\n")
     case "workspace": {
       const mappedFields = Object.entries(state.global)
         .filter(([, value]) => value)
